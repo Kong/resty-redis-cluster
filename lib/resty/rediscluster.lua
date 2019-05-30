@@ -1,6 +1,7 @@
-local ffi = require 'ffi'
 local redis = require "resty.redis"
 local resty_lock = require "resty.lock"
+
+local xmodem = require "resty.xmodem"
 
 local setmetatable = setmetatable
 local tostring = tostring
@@ -9,38 +10,6 @@ local DEFAULT_MAX_REDIRECTION = 5
 local DEFAULT_KEEPALIVE_TIMEOUT = 55000
 local DEFAULT_KEEPALIVE_CONS = 1000
 local DEFAULT_CONNECTION_TIMEOUT = 1000
-
-ffi.cdef [[
-int lua_redis_crc16(char *key, int keylen);
-]]
-
---load from path, otherwise we should load from LD_LIBRARY_PATH by
---export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:your_lib_path
-local function load_shared_lib(so_name)
-    local string_gmatch = string.gmatch
-    local string_match = string.match
-    local io_open = io.open
-    local io_close = io.close
-
-    local cpath = package.cpath
-
-    for k, _ in string_gmatch(cpath, "[^;]+") do
-        local fpath = string_match(k, "(.*/)")
-        fpath = fpath .. so_name
-
-        local f = io_open(fpath)
-        if f ~= nil then
-            io_close(f)
-            return ffi.load(fpath)
-        end
-    end
-end
-
-
-local clib = load_shared_lib("redis_slot.so")
-if not clib then
-    ngx.log(ngx.ERR, "can not load redis_slot library")
-end
 
 
 local function parseKey(keyStr)
@@ -56,8 +25,7 @@ end
 
 
 local function redis_slot(str)
-    local str = parseKey(str)
-    return clib.lua_redis_crc16(ffi.cast("char *", str), #str)
+    return xmodem.redis_crc(parseKey(str))
 end
 
 
