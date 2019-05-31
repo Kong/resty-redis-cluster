@@ -40,15 +40,13 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 
 ### installation
 
-1. please compile and generate redis_slot.so from redis_slot.c (can done by gcc)
-
-2. please add redis_slot.so and rediscluster.lua at lualib, Also please add library:lua-resty-redis and lua-resty-lock
+1. please add rediscluster.lua and xmodemx.lua at lualib, Also please add library:lua-resty-redis and lua-resty-lock
    nginx.conf like:
 
    lua_package_path "/path/lualib/?.lua;";
    lua_package_cpath "/path/lualib/?.so;";
 
-3. nginx.conf add config:
+2. nginx.conf add config:
 
    lua_shared_dict redis_cluster_slot_locks 100k;
 
@@ -59,6 +57,36 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 ```lua
 local config = {
     name = "testCluster",                   --rediscluster name
+    serv_list = {                           --redis cluster node list(host and port),
+        { ip = "127.0.0.1", port = 7001 },
+        { ip = "127.0.0.1", port = 7002 },
+        { ip = "127.0.0.1", port = 7003 },
+        { ip = "127.0.0.1", port = 7004 },
+        { ip = "127.0.0.1", port = 7005 },
+        { ip = "127.0.0.1", port = 7006 }
+    },
+    keepalive_timeout = 60000,              --redis connection pool idle timeout
+    keepalive_cons = 1000,                  --redis connection pool size
+    connection_timout = 1000,               --timeout while connecting
+    max_redirection = 5,                    --maximum retry attempts for redirection
+}
+
+local redis_cluster = require "rediscluster"
+local red_c = redis_cluster:new(config)
+
+local v, err = red_c:get("name")
+if err then
+    ngx.log(ngx.ERR, "err: ", err)
+else
+    ngx.say(v)
+end
+```
+  custom shared dictionary name:
+
+```lua
+local config = {
+    name = "testCluster",                   --rediscluster name
+    dict_name = "test_dict",                --lua shared dictionary name for locks
     serv_list = {                           --redis cluster node list(host and port),
         { ip = "127.0.0.1", port = 7001 },
         { ip = "127.0.0.1", port = 7002 },
