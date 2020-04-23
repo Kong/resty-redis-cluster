@@ -5,6 +5,17 @@ local xmodem = require "resty.xmodem"
 
 local setmetatable = setmetatable
 local tostring = tostring
+local string = string
+local io = io
+local package = package
+local type = type
+local table = table
+local ngx = ngx
+local math = math
+local rawget = rawget
+local pairs = pairs
+local unpack = unpack
+
 
 local DEFAULT_MAX_REDIRECTION = 5
 local DEFAULT_KEEPALIVE_TIMEOUT = 55000
@@ -40,13 +51,16 @@ local function checkAuth(self, redis_client)
     if type(self.config.auth) == "string" then
         local count, err = redis_client:get_reused_times()
         if count == 0 then
+            local _
             _, err = redis_client:auth(self.config.auth)
         end
+
         if not err then
             return true, nil
         else
             return nil, err
         end
+
     else
         return true, nil
     end
@@ -71,8 +85,8 @@ local function try_hosts_slots(self, serv_list)
         local ip = serv_list[i].ip
         local port = serv_list[i].port
         local redis_client = redis:new()
-        local ok, err = redis_client:connect(ip, port)
         redis_client:set_timeout(config.connection_timout or DEFAULT_CONNECTION_TIMEOUT)
+        local ok, err = redis_client:connect(ip, port)
         if ok then
             local authok, autherr = checkAuth(self, redis_client)
             if autherr then
@@ -82,10 +96,19 @@ local function try_hosts_slots(self, serv_list)
             local slots_info, err = redis_client:cluster("slots")
             if slots_info then
                 local slots = {}
+                -- while slots are updated, create a list of servers present in cluster
+                -- this can differ from self.config.serv_list if a cluster is resized (added/removed nodes)
+                local servers = { serv_list = {} }
                 for i = 1, #slots_info do
                     local sub_info = slots_info[i]
                     --slot info item 1 and 2 are the subrange start end slots
                     local startslot, endslot = sub_info[1], sub_info[2]
+
+                    -- generate new list of servers
+                    for j = 3, #sub_info do
+                      servers.serv_list[#servers.serv_list + 1 ] = { ip = sub_info[j][1], port = sub_info[j][2] }
+                    end
+
                     for slot = startslot, endslot do
                         local list = { serv_list = {} }
                         --from 3, here lists the host/port/nodeid of in charge nodes
@@ -97,6 +120,7 @@ local function try_hosts_slots(self, serv_list)
                 end
                 --ngx.log(ngx.NOTICE, "finished initializing slotcache...")
                 slot_cache[self.config.name] = slots
+                slot_cache[self.config.name .. "serv_list"] = servers
                 releaseConnection(redis_client, config)
                 return true, nil
             else
@@ -112,7 +136,20 @@ end
 
 function _M.fetch_slots(self)
     local serv_list = self.config.serv_list
-    local ok, errors = try_hosts_slots(self, serv_list)
+    local serv_list_cached = slot_cache[self.config.name .. "serv_list"]
+
+    local serv_list_combined = {}
+
+    -- if a cached serv_list is present, use it
+    if serv_list_cached then
+        serv_list_combined = serv_list_cached.serv_list
+    else
+        serv_list_combined = serv_list
+    end
+
+    serv_list_cached = nil -- important!
+
+    local ok, errors = try_hosts_slots(self, serv_list_combined)
     if errors then
         ngx.log(ngx.ERR, "failed to fetch slots: ", table.concat(errors, ";"))
     end
@@ -150,6 +187,8 @@ function _M.init_slots(self)
     end
 end
 
+
+
 function _M.new(self, config)
     if not config.name then
         return nil, " redis cluster config name is empty"
@@ -157,6 +196,8 @@ function _M.new(self, config)
     if not config.serv_list or #config.serv_list < 1 then
         return nil, " redis cluster config serv_list is empty"
     end
+    
+
     local inst = { config = config }
     inst = setmetatable(inst, mt)
     inst:init_slots()
@@ -258,10 +299,13 @@ local function handleCommandWithRetry(self, targetIp, targetPort, asking, cmd, k
     for k = 1, config.max_redirection or DEFAULT_MAX_REDIRECTION do
 
         if k > 1 then
-            --ngx.log(ngx.NOTICE, "handle retry attempts:" .. k .. " for cmd:" .. cmd .. " key:" .. key)
+            ngx.log(ngx.NOTICE, "handle retry attempts:" .. k .. " for cmd:" .. cmd .. " key:" .. key)
         end
 
         local slots = slot_cache[self.config.name]
+        if slots == nil or slots[slot] == nil then
+            return nil, "not slots information present, nginx might have never successfully executed cluster(\"slots\")"
+        end
         local serv_list = slots[slot].serv_list
 
         -- We must empty local reference to slots cache, otherwise there will be memory issue while
@@ -311,7 +355,7 @@ local function handleCommandWithRetry(self, targetIp, targetPort, asking, cmd, k
 
             local needToRetry = false
             local res, err
-            if cmd == "eval" then
+            if cmd == "eval" or cmd == "evalsha" then
                 res, err = redis_client[cmd](redis_client, ...)
             else
                 res, err = redis_client[cmd](redis_client, key, ...)
@@ -357,7 +401,10 @@ local function handleCommandWithRetry(self, targetIp, targetPort, asking, cmd, k
         else
             --There might be node fail, we should also refresh slot cache
             self:fetch_slots()
-            return nil, connerr
+            if k == config.max_redirection or k == DEFAULT_MAX_REDIRECTION then
+                -- only return after allowing for `k` attempts
+                return nil, connerr
+            end
         end
     end
     return nil, "failed to execute command, reaches maximum redirection attempts"
@@ -368,7 +415,8 @@ local function generateMagicSeed(self)
     --For pipeline, We don't want request to be forwarded to all channels, eg. if we have 3*3 cluster(3 master 2 replicas) we
     --alway want pick up specific 3 nodes for pipeline requests, instead of 9.
     --Currently we simply use (num of allnode)%count as a randomly fetch. Might consider a better way in the future.
-    local nodeCount = #self.config.serv_list
+    -- use the dynamic serv_list instead of the static config serv_list
+    local nodeCount = #slot_cache[self.config.name .. "serv_list"].serv_list
     return math.random(nodeCount)
 end
 
@@ -457,6 +505,9 @@ function _M.commit_pipeline(self)
     local needToRetry = false
 
     local slots = slot_cache[config.name]
+    if slots == nil then
+        return nil, "not slots information present, nginx might have never successfully executed cluster(\"slots\")"
+    end
 
     local node_res_map = {}
 
@@ -470,6 +521,9 @@ function _M.commit_pipeline(self)
         _reqs[i].origin_index = i
         local key = _reqs[i].key
         local slot = redis_slot(tostring(key))
+        if slots[slot] == nil then
+            return nil, "not slots information present, nginx might have never successfully executed cluster(\"slots\")"
+        end
         local slot_item = slots[slot]
 
         local ip, port, slave, err = pick_node(self, slot_item.serv_list, slot, magicRandomPickupSeed)
@@ -521,7 +575,11 @@ function _M.commit_pipeline(self)
             for i = 1, #reqs do
                 local req = reqs[i]
                 if #req.args > 0 then
-                    redis_client[req.cmd](redis_client, req.key, unpack(req.args))
+                    if req.cmd == "eval" or req.cmd == "evalsha" then
+                        redis_client[req.cmd](redis_client, unpack(req.args))
+                    else
+                        redis_client[req.cmd](redis_client, req.key, unpack(req.args))
+                    end
                 else
                     redis_client[req.cmd](redis_client, req.key)
                 end
@@ -559,9 +617,9 @@ function _M.cancel_pipeline(self)
     self._reqs = nil
 end
 
-local function _do_eval_cmd(self, ...)
+local function _do_eval_cmd(self, cmd, ...)
 --[[
-eval command usage: 
+eval command usage:
 eval(script, 1, key, arg1, arg2 ...)
 eval(script, 0, arg1, arg2 ...)
 ]]
@@ -571,18 +629,18 @@ eval(script, 0, arg1, arg2 ...)
         return nil, "Cannot execute eval without keys number"
     end
     if keys_num > 1 then
-        return nil, "Cannot execute eval with more than one keys for redis cluster" 
+        return nil, "Cannot execute eval with more than one keys for redis cluster"
     end
     local key = args[3] or "no_key"
-    return _do_cmd(self, "eval", key, ...)
+    return _do_cmd(self, cmd, key, ...)
 end
 -- dynamic cmd
 setmetatable(_M, {
     __index = function(self, cmd)
         local method =
         function(self, ...)
-            if cmd == "eval" then
-                return _do_eval_cmd(self, ...)
+            if cmd == "eval" or cmd == "evalsha" then
+                return _do_eval_cmd(self, cmd, ...)
             else
                 return _do_cmd(self, cmd, ...)
             end
