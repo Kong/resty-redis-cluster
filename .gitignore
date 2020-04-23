@@ -29,7 +29,3 @@ logs/
 # system ignore
 .DS_Store
 Thumbs.db
-
-#c
-*.so
-*.o
