@@ -71,7 +71,10 @@ local function try_hosts_slots(self, serv_list)
         local ip = serv_list[i].ip
         local port = serv_list[i].port
         local redis_client = redis:new()
-        local ok, err = redis_client:connect(ip, port)
+        local ok, err = redis_client:connect(ip, port, {
+            ssl = config.ssl or false,
+            ssl_verify = config.ssl_verify or false,
+        })
         redis_client:set_timeout(config.connection_timout or DEFAULT_CONNECTION_TIMEOUT)
         if ok then
             local authok, autherr = checkAuth(self, redis_client)
@@ -281,7 +284,10 @@ local function handleCommandWithRetry(self, targetIp, targetPort, asking, cmd, k
 
         local redis_client = redis:new()
         redis_client:set_timeout(config.connection_timout or DEFAULT_CONNECTION_TIMEOUT)
-        local ok, connerr = redis_client:connect(ip, port)
+        local ok, connerr = redis_client:connect(ip, port, {
+            ssl = config.ssl or false,
+            ssl_verify = config.ssl_verify or false,
+        })
 
         if ok then
             local authok, autherr = checkAuth(self, redis_client)
@@ -498,7 +504,10 @@ function _M.commit_pipeline(self)
         local slave = v.slave
         local redis_client = redis:new()
         redis_client:set_timeout(config.connection_timout or DEFAULT_CONNECTION_TIMEOUT)
-        local ok, err = redis_client:connect(ip, port)
+        local ok, err = redis_client:connect(ip, port, {
+            ssl = config.ssl or false,
+            ssl_verify = config.ssl_verify or false,
+        })
 
         local authok, autherr = checkAuth(self, redis_client)
         if autherr then
