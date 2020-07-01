@@ -71,6 +71,9 @@ local function try_hosts_slots(self, serv_list)
         local ip = serv_list[i].ip
         local port = serv_list[i].port
         local redis_client = redis:new()
+
+        print("[CONFIG] " .. require"inspect"(config))
+
         local ok, err = redis_client:connect(ip, port, {
             ssl = config.ssl or false,
             ssl_verify = config.ssl_verify or false,
@@ -83,6 +86,8 @@ local function try_hosts_slots(self, serv_list)
                 return nil, errors
             end
             local slots_info, err = redis_client:cluster("slots")
+
+            print("[SLOTS_INFO] " .. require"inspect"(slots_info))
             if slots_info then
                 local slots = {}
                 for i = 1, #slots_info do
