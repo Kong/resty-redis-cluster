@@ -1,8 +1,8 @@
 package = "kong-redis-cluster"
-version = "1.1-0"
+version = "redistls-1"
 source = {
     url = "git://github.com/Kong/resty-redis-cluster",
-    tag = "1.1-0"
+    tag = "feat/redis-cluster-tls"
 }
 description = {
     summary = "Openresty lua client for redis cluster",
@@ -16,7 +16,7 @@ description = {
 }
 dependencies = {
   "lua >= 5.1",
-  "lua-resty-redis"
+  "lua-resty-redis-client == redistls-1",
 }
 build = {
     type = "builtin",

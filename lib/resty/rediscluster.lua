@@ -1,4 +1,4 @@
-local redis = require "resty.redis"
+local redis = require "resty.redisclient"
 local resty_lock = require "resty.lock"
 
 local xmodem = require "resty.xmodem"
