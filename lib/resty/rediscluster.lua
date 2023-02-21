@@ -80,7 +80,7 @@ local function check_auth(self, redis_client)
         elseif count > 0 then
             return true, nil -- reusing the connection, so already authenticated
         end
-        
+
         if self.config.username then
             if self.config.username == "default" then
                 -- redis uses 'default' as the default username now for the pre-6 scheme
@@ -245,7 +245,8 @@ function _M.fetch_slots(self)
         serv_list_combined = serv_list
     end
 
-    serv_list_cached = nil -- important!
+    -- important!
+    serv_list_cached = nil -- luacheck: ignore
 
     local _, errors = try_hosts_slots(self, serv_list_combined)
     if errors then
@@ -444,7 +445,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
 
         -- We must empty local reference to slots cache, otherwise there will be memory issue while
         -- coroutine swich happens(eg. ngx.sleep, cosocket), very important!
-        slots = nil
+        slots = nil -- luacheck: ignore
 
         local ip, port, slave, err
 
@@ -467,7 +468,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
         local ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
 
         if ok then
-            local authok, autherr = check_auth(self, redis_client)
+            local _, autherr = check_auth(self, redis_client)
             if autherr then
                 return nil, autherr
             end
@@ -692,7 +693,7 @@ function _M.commit_pipeline(self)
         if err then
             -- We must empty local reference to slots cache, otherwise there will be memory issue while
             -- coroutine swich happens(eg. ngx.sleep, cosocket), very important!
-            slots = nil
+            slots = nil -- luacheck: ignore
             self:refresh_slots()
             return nil, err
         end
@@ -708,7 +709,7 @@ function _M.commit_pipeline(self)
 
     -- We must empty local reference to slots cache, otherwise there will be memory issue while
     -- coroutine swich happens(eg. ngx.sleep, cosocket), very important!
-    slots = nil
+    slots = nil -- luacheck: ignore
 
     for k, v in pairs(node_req_map) do
         local ip = v.ip
@@ -721,7 +722,7 @@ function _M.commit_pipeline(self)
                                   config.read_timeout or DEFAULT_READ_TIMEOUT)
         local ok, err = redis_client:connect(ip, port, self.config.connect_opts)
 
-        local authok, autherr = check_auth(self, redis_client)
+        local _, autherr = check_auth(self, redis_client)
         if autherr then
             return nil, autherr
         end

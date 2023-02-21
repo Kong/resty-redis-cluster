@@ -37,3 +37,4 @@ Thumbs.db
 luacov*
 *.out
 t/servroot
+*.rock
