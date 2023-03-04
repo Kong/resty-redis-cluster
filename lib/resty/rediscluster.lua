@@ -230,12 +230,11 @@ function _M.fetch_slots(self)
     local serv_list = self.config.serv_list
     local serv_list_cached = slot_cache[self.config.name .. "serv_list"]
 
+    -- Start with the original configured nodes, since their names should point to something useful
     local serv_list_combined = deepcopy(serv_list or {})
-
-    -- if a cached serv_list is present, start with that
     if serv_list_cached then
-        -- then append the serv_list from config, in the event that the entire
-        -- cached serv_list no longer points to anything usable
+        -- then append the cached nodes, in the event that the entire
+        -- original config no longer points to anything usable, we keep trying the last known nodes
         for _, s in ipairs(serv_list_cached.serv_list) do
             table_insert(serv_list_combined, s)
         end
