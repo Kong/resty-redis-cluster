@@ -18,6 +18,7 @@ local char = string.char
 local table_insert = table.insert
 local string_find = string.find
 local redis_crc = xmodem.redis_crc
+local deepcopy = require("pl.tablex").deepcopy
 
 local DEFAULT_SHARED_DICT_NAME = "redis_cluster_slot_locks"
 local DEFAULT_REFRESH_DICT_NAME = "refresh_lock"
@@ -229,7 +230,7 @@ function _M.fetch_slots(self)
     local serv_list = self.config.serv_list
     local serv_list_cached = slot_cache[self.config.name .. "serv_list"]
 
-    local serv_list_combined = serv_list or {}
+    local serv_list_combined = deepcopy(serv_list or {})
 
     -- if a cached serv_list is present, start with that
     if serv_list_cached then
