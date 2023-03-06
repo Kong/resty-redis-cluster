@@ -235,10 +235,10 @@ function _M.fetch_slots(self)
     if serv_list_cached then
         serv_list_combined = serv_list_cached.serv_list
 
-        -- then append the serv_list from config, in the event that the entire
-        -- cached serv_list no longer points to anything usable
-        for _, s in ipairs(serv_list) do
-            table_insert(serv_list_combined, s)
+        -- then prepend the serv_list from config, in the event that the entire
+        -- config serv_list no longer points to anything usable, try the cached IPs
+        for i, s in ipairs(serv_list) do
+            table_insert(serv_list_combined, i, s)
         end
     else
         -- otherwise we bootstrap with our serv_list from config
