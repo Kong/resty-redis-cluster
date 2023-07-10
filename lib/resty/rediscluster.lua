@@ -720,7 +720,10 @@ function _M.commit_pipeline(self)
         redis_client:set_timeouts(config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   config.read_timeout or DEFAULT_READ_TIMEOUT)
-        local ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+        local ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+        if not ok then
+            return nil, "failed to connect, err: " .. connerr
+        end
 
         local _, autherr = check_auth(self, redis_client)
         if autherr then
