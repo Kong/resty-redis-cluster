@@ -1,8 +1,9 @@
-OPENRESTY_PREFIX ?=/usr/local/openresty
-PREFIX ?=          /usr/local
-LUA_INCLUDE_DIR ?= $(PREFIX)/include
-LUA_LIB_DIR ?=     $(PREFIX)/lib/lua/$(LUA_VERSION)
-INSTALL ?= install
+LUA_VERSION      ?= 5.1
+OPENRESTY_PREFIX ?= /usr/local/openresty
+PREFIX           ?= /usr/local
+LUA_INCLUDE_DIR  ?= $(PREFIX)/include
+LUA_LIB_DIR      ?= $(PREFIX)/lib/lua/$(LUA_VERSION)
+INSTALL          ?= install
 
 .PHONY: all test install
 
