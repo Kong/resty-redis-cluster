@@ -63,6 +63,7 @@ local function redis_slot(str)
 end
 
 local function check_auth(self, redis_client)
+    -- redis before 6.0
     if type(self.config.auth) == "string" then
         local count, err = redis_client:get_reused_times()
         if not count then
@@ -81,11 +82,7 @@ local function check_auth(self, redis_client)
             return true, nil -- reusing the connection, so already authenticated
         end
 
-        if self.config.username then
-            if self.config.username == "default" then
-                -- redis uses 'default' as the default username now for the pre-6 scheme
-                return nil, "'username' cannot be 'default'"
-            end
+        if type(self.config.username) == "string" then
             return redis_client:auth(self.config.username, self.config.password)
         else
             return redis_client:auth(self.config.password)
