@@ -46,6 +46,6 @@ jobs:
               docker compose -f t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml logs
 
           - name: Run tests
-            run:
+            run: |
               export REDIS_AUTH=$([[ "${{ matrix.conf }}" == "auth" ]] && echo "yes" || echo "no")
               make test
