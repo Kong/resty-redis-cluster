@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  redis_1:
+    image: redis:6.2.14
+    container_name: redis_1
+    volumes:
+      - ./conf/redis-1.conf:/usr/local/etc/redis/redis.conf
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    network_mode: host
+
+  redis_2:
+    image: redis:6.2.14
+    container_name: redis_2
+    volumes:
+      - ./conf/redis-2.conf:/usr/local/etc/redis/redis.conf
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    network_mode: host
+
+  redis_3:
+    image: redis:6.2.14
+    container_name: redis_3
+    volumes:
+      - ./conf/redis-3.conf:/usr/local/etc/redis/redis.conf
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    network_mode: host
+
+  redis_4:
+    image: redis:6.2.14
+    container_name: redis_4
+    volumes:
+      - ./conf/redis-4.conf:/usr/local/etc/redis/redis.conf
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    network_mode: host
+
+  redis_5:
+    image: redis:6.2.14
+    container_name: redis_5
+    volumes:
+      - ./conf/redis-5.conf:/usr/local/etc/redis/redis.conf
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    network_mode: host
+
+  redis_6:
+    image: redis:6.2.14
+    container_name: redis_6
+    volumes:
+      - ./conf/redis-6.conf:/usr/local/etc/redis/redis.conf
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    network_mode: host
+
+  redis-cluster-init:
+    image: redis:6.2.14
+    container_name: redis-cluster-init
+    restart: 'no'
+    tty: true
+    network_mode: host
+    depends_on:
+      - redis_1
+      - redis_2
+      - redis_3
+      - redis_4
+      - redis_5
+      - redis_6
+    entrypoint: []
+    command: redis-cli --cluster create 127.0.0.1:6371 127.0.0.1:6372 127.0.0.1:6373 127.0.0.1:6374 127.0.0.1:6375 127.0.0.1:6376 --cluster-replicas 1 --cluster-yes
+
