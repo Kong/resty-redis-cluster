@@ -18,9 +18,6 @@ our $HttpConfig = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     lua_package_cpath "/usr/local/openresty-debug/lualib/?.so;/usr/local/openresty/lualib/?.so;;";
     lua_shared_dict redis_cluster_slot_locks 32k;
-    init_by_lua '
-        require("luacov")
-    ';
 };
 
 
