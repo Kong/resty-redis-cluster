@@ -3,7 +3,12 @@ use Cwd qw(cwd);
 
 repeat_each(2);
 
-plan tests => repeat_each() * (3 * blocks());
+my $redis_auth = $ENV{REDIS_AUTH};
+if (defined($redis_auth) && $redis_auth eq "yes") {
+    plan tests => repeat_each() * (3 * blocks());
+} else {
+    plan(skip_all => "skip when REDIS_AUTH is not enabled");
+}
 
 my $pwd = cwd();
 
@@ -11,9 +16,6 @@ our $HttpConfig = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     lua_package_cpath "/usr/local/openresty-debug/lualib/?.so;/usr/local/openresty/lualib/?.so;;";
     lua_shared_dict redis_cluster_slot_locks 32k;
-    init_by_lua '
-        require("luacov")
-    ';
 };
 
 
@@ -33,13 +35,12 @@ __DATA__
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 6381 },
-                                            { ip = "127.0.0.1", port = 6382 },
-                                            { ip = "127.0.0.1", port = 6383 },
-                                            { ip = "127.0.0.1", port = 6384 },
-                                            { ip = "127.0.0.1", port = 6385 },
-                                            { ip = "127.0.0.1", port = 6386 },
-                                            { ip = "127.0.0.1", port = 6387 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -92,6 +93,8 @@ dog: an animal
 --- no_error_log
 [error]
 
+
+
 === TEST 2: username and password
 --- http_config eval: $::HttpConfig
 --- config
@@ -101,13 +104,12 @@ dog: an animal
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 6381 },
-                                            { ip = "127.0.0.1", port = 6382 },
-                                            { ip = "127.0.0.1", port = 6383 },
-                                            { ip = "127.0.0.1", port = 6384 },
-                                            { ip = "127.0.0.1", port = 6385 },
-                                            { ip = "127.0.0.1", port = 6386 },
-                                            { ip = "127.0.0.1", port = 6387 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size

@@ -5,8 +5,12 @@ use Cwd qw(cwd);
 
 repeat_each(2);
 
-plan tests => repeat_each() * (3 * blocks());
-
+my $redis_auth = $ENV{REDIS_AUTH};
+if (defined($redis_auth) && $redis_auth eq "yes") {
+    plan tests => repeat_each() * (3 * blocks());
+} else {
+    plan(skip_all => "skip when REDIS_AUTH is not enabled");
+}
 my $pwd = cwd();
 
 our $HttpConfig = qq{
@@ -17,7 +21,6 @@ our $HttpConfig = qq{
 
 
 no_long_string();
-#no_diff();
 
 run_tests();
 
@@ -82,6 +85,8 @@ qr/failed to connect, err: too many waiting connect operations/
 --- no_error_log
 [error]
 
+
+
 === TEST 2: connections in the backlog queue have reached timeout(with auth)
 --- http_config eval: $::HttpConfig
 --- config
@@ -98,7 +103,7 @@ qr/failed to connect, err: too many waiting connect operations/
                                             { ip = "127.0.0.1", port = 6375 },
                                             { ip = "127.0.0.1", port = 6376 }
                                         },
-                            connect_timeout = 50,
+                            connect_timeout = 5,
                             connect_opts = {
                                                 backlog = 100,
                                                 pool_size = 1,

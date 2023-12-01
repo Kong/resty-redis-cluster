@@ -1,0 +1,2 @@
+user default on >kong ~* +@all
+user kong on >kong ~* +@all

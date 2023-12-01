@@ -5,7 +5,12 @@ use Cwd qw(cwd);
 
 repeat_each(2);
 
-plan tests => repeat_each() * (3 * blocks());
+my $redis_auth = $ENV{REDIS_AUTH};
+if (defined($redis_auth) && $redis_auth eq "no") {
+    plan tests => repeat_each() * (3 * blocks());
+} else {
+    plan(skip_all => "skip when REDIS_AUTH is enabled");
+}
 
 my $pwd = cwd();
 
@@ -13,9 +18,6 @@ our $HttpConfig = qq{
     lua_package_path "$pwd/lib/?.lua;;";
     lua_package_cpath "/usr/local/openresty-debug/lualib/?.so;/usr/local/openresty/lualib/?.so;;";
     lua_shared_dict redis_cluster_slot_locks 32k;
-    init_by_lua '
-        require("luacov")
-    ';
 };
 
 
@@ -35,13 +37,12 @@ __DATA__
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -93,6 +94,8 @@ dog: an animal
 --- no_error_log
 [error]
 
+
+
 === TEST 2: flushall , Note this will be executed only on 1 node in cluster
 --- http_config eval: $::HttpConfig
 --- config
@@ -101,13 +104,12 @@ dog: an animal
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -140,6 +142,8 @@ flushall: true
 --- no_error_log
 [error]
 
+
+
 === TEST 3: get nil bulk value
 --- http_config eval: $::HttpConfig
 --- config
@@ -148,13 +152,12 @@ flushall: true
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -204,6 +207,8 @@ not_found not found.
 --- no_error_log
 [error]
 
+
+
 === TEST 4: get nil list
 --- http_config eval: $::HttpConfig
 --- config
@@ -212,13 +217,12 @@ not_found not found.
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -271,6 +275,8 @@ get nokey: 0 (table)
 --- no_error_log
 [error]
 
+
+
 === TEST 5: incr and decr
 --- http_config eval: $::HttpConfig
 --- config
@@ -279,13 +285,12 @@ get nokey: 0 (table)
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -390,6 +395,8 @@ connections: 1
 --- no_error_log
 [error]
 
+
+
 === TEST 6: bad incr command format
 --- http_config eval: $::HttpConfig
 --- config
@@ -398,13 +405,12 @@ connections: 1
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -438,6 +444,8 @@ failed to set connections: nil: ERR wrong number of arguments for 'incr' command
 --- no_error_log
 [error]
 
+
+
 === TEST 7: lpush and lrange
 --- http_config eval: $::HttpConfig
 --- config
@@ -446,13 +454,12 @@ failed to set connections: nil: ERR wrong number of arguments for 'incr' command
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -512,6 +519,8 @@ lrange result: ["hello","world"]
 --- no_error_log
 [error]
 
+
+
 === TEST 8: blpop expires its own timeout
 --- http_config eval: $::HttpConfig
 --- config
@@ -520,13 +529,12 @@ lrange result: ["hello","world"]
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -577,6 +585,8 @@ no element popped.
 [error]
 --- timeout: 3
 
+
+
 === TEST 9: blpop expires cosocket read timeout
 --- http_config eval: $::HttpConfig
 --- config
@@ -585,13 +595,12 @@ no element popped.
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -641,6 +650,8 @@ failed to blpop: timeout
 --- error_log
 lua tcp socket read timed out
 
+
+
 === TEST 10: mget
 --- http_config eval: $::HttpConfig
 --- config
@@ -649,13 +660,12 @@ lua tcp socket read timed out
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -708,6 +718,8 @@ mget result: ["an animal",null,"an animal"]
 --- no_error_log
 [error]
 
+
+
 === TEST 11: hmget array_to_hash
 --- http_config eval: $::HttpConfig
 --- config
@@ -716,13 +728,12 @@ mget result: ["an animal",null,"an animal"]
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -803,6 +814,8 @@ cow: moo
 --- no_error_log
 [error]
 
+
+
 === TEST 12: boolean args
 --- http_config eval: $::HttpConfig
 --- config
@@ -811,13 +824,12 @@ cow: moo
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 7000 },
-                                            { ip = "127.0.0.1", port = 7001 },
-                                            { ip = "127.0.0.1", port = 7002 },
-                                            { ip = "127.0.0.1", port = 7003 },
-                                            { ip = "127.0.0.1", port = 7004 },
-                                            { ip = "127.0.0.1", port = 7005 },
-                                            { ip = "127.0.0.1", port = 7006 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
@@ -887,6 +899,8 @@ foo: false, type: string
 --- no_error_log
 [error]
 
+
+
 === TEST 13: connection refused
 --- http_config eval: $::HttpConfig
 --- config
@@ -931,6 +945,8 @@ GET /t
 --- no_error_log
 [alert]
 
+
+
 === TEST 14: custom cmd (array_to_hash) and table key
 --- http_config eval: $::HttpConfig
 --- config
@@ -940,13 +956,12 @@ GET /t
             local config = {
                             name = "testCluster",                   --rediscluster name
                             serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 700 },
-                                            { ip = "127.0.0.1", port = 701 },
-                                            { ip = "127.0.0.1", port = 702 },
-                                            { ip = "127.0.0.1", port = 703 },
-                                            { ip = "127.0.0.1", port = 704 },
-                                            { ip = "127.0.0.1", port = 705 },
-                                            { ip = "127.0.0.1", port = 706 }
+                                            { ip = "127.0.0.1", port = 6371 },
+                                            { ip = "127.0.0.1", port = 6372 },
+                                            { ip = "127.0.0.1", port = 6373 },
+                                            { ip = "127.0.0.1", port = 6374 },
+                                            { ip = "127.0.0.1", port = 6375 },
+                                            { ip = "127.0.0.1", port = 6376 }
                                         },
                             keepalive_timeout = 60000,              --redis connection pool idle timeout
                             keepalive_cons = 1000,                  --redis connection pool size
