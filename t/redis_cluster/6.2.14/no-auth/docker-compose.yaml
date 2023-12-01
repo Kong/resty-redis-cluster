@@ -8,6 +8,14 @@ services:
       - ./conf/redis-1.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     network_mode: host
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
   redis_2:
     image: redis:6.2.14
@@ -16,6 +24,14 @@ services:
       - ./conf/redis-2.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     network_mode: host
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
   redis_3:
     image: redis:6.2.14
@@ -24,6 +40,14 @@ services:
       - ./conf/redis-3.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     network_mode: host
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
   redis_4:
     image: redis:6.2.14
@@ -32,6 +56,14 @@ services:
       - ./conf/redis-4.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     network_mode: host
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
   redis_5:
     image: redis:6.2.14
@@ -40,6 +72,14 @@ services:
       - ./conf/redis-5.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     network_mode: host
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
   redis_6:
     image: redis:6.2.14
@@ -48,6 +88,14 @@ services:
       - ./conf/redis-6.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     network_mode: host
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
   redis-cluster-init:
     image: redis:6.2.14
@@ -55,6 +103,7 @@ services:
     restart: 'no'
     tty: true
     network_mode: host
+    read_only: true
     depends_on:
       - redis_1
       - redis_2
@@ -64,4 +113,11 @@ services:
       - redis_6
     entrypoint: []
     command: redis-cli --cluster create 127.0.0.1:6371 127.0.0.1:6372 127.0.0.1:6373 127.0.0.1:6374 127.0.0.1:6375 127.0.0.1:6376 --cluster-replicas 1 --cluster-yes
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 50M
+    security_opt:
+      - "no-new-privileges=true"
 
