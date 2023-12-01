@@ -1,4 +1,4 @@
-name: test
+name: CI
 
 on:
     push:
@@ -43,7 +43,15 @@ jobs:
           - name: Set up Redis Cluster
             run: |
               docker compose -f t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml up -d
-              docker compose -f t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml logs
+              echo "Waiting for Redis cluster to be ready..."
+              for i in {1..30}; do
+                if docker compose -f t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml logs | grep -q "[OK] All nodes agree about slots configuration."; then
+                  echo "Redis cluster is ready."
+                  break
+                fi
+                echo "Waiting for Redis cluster to be ready... attempt $i"
+                sleep 1
+              done
 
           - name: Run tests
             run: |

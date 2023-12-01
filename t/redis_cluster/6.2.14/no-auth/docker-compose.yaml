@@ -1,19 +1,29 @@
 version: '3.8'
 
+networks:
+  redis-cluster:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/24
+
 services:
   redis_1:
     image: redis:6.2.14
     container_name: redis_1
     volumes:
-      - ./conf/redis-1.conf:/usr/local/etc/redis/redis.conf
+      - ./conf/redis_1.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
-    network_mode: host
-    read_only: true
+    ports:
+      - 6371:6371
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.31
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 6M
     security_opt:
       - "no-new-privileges=true"
 
@@ -21,15 +31,17 @@ services:
     image: redis:6.2.14
     container_name: redis_2
     volumes:
-      - ./conf/redis-2.conf:/usr/local/etc/redis/redis.conf
+      - ./conf/redis_2.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
-    network_mode: host
-    read_only: true
+    ports:
+      - 6372:6372
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.32
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 6M
     security_opt:
       - "no-new-privileges=true"
 
@@ -37,15 +49,17 @@ services:
     image: redis:6.2.14
     container_name: redis_3
     volumes:
-      - ./conf/redis-3.conf:/usr/local/etc/redis/redis.conf
+      - ./conf/redis_3.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
-    network_mode: host
-    read_only: true
+    ports:
+      - 6373:6373
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.33
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 6M
     security_opt:
       - "no-new-privileges=true"
 
@@ -53,15 +67,17 @@ services:
     image: redis:6.2.14
     container_name: redis_4
     volumes:
-      - ./conf/redis-4.conf:/usr/local/etc/redis/redis.conf
+      - ./conf/redis_4.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
-    network_mode: host
-    read_only: true
+    ports:
+      - 6374:6374
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.34
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 6M
     security_opt:
       - "no-new-privileges=true"
 
@@ -69,15 +85,17 @@ services:
     image: redis:6.2.14
     container_name: redis_5
     volumes:
-      - ./conf/redis-5.conf:/usr/local/etc/redis/redis.conf
+      - ./conf/redis_5.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
-    network_mode: host
-    read_only: true
+    ports:
+      - 6375:6375
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.35
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 6M
     security_opt:
       - "no-new-privileges=true"
 
@@ -85,15 +103,17 @@ services:
     image: redis:6.2.14
     container_name: redis_6
     volumes:
-      - ./conf/redis-6.conf:/usr/local/etc/redis/redis.conf
+      - ./conf/redis_6.conf:/usr/local/etc/redis/redis.conf
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
-    network_mode: host
-    read_only: true
+    ports:
+      - 6376:6376
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.36
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 6M
     security_opt:
       - "no-new-privileges=true"
 
@@ -102,8 +122,6 @@ services:
     container_name: redis-cluster-init
     restart: 'no'
     tty: true
-    network_mode: host
-    read_only: true
     depends_on:
       - redis_1
       - redis_2
@@ -112,7 +130,10 @@ services:
       - redis_5
       - redis_6
     entrypoint: []
-    command: redis-cli --cluster create 127.0.0.1:6371 127.0.0.1:6372 127.0.0.1:6373 127.0.0.1:6374 127.0.0.1:6375 127.0.0.1:6376 --cluster-replicas 1 --cluster-yes
+    command: redis-cli --cluster create 172.20.0.31:6371 172.20.0.32:6372 172.20.0.33:6373 172.20.0.34:6374 172.20.0.35:6375 172.20.0.36:6376 --cluster-replicas 1 --cluster-yes
+    networks:
+      redis-cluster:
+        ipv4_address: 172.20.0.37
     deploy:
       resources:
         limits:
