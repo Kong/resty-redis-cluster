@@ -23,7 +23,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
@@ -41,7 +41,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
@@ -59,7 +59,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
@@ -77,7 +77,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
@@ -95,7 +95,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
@@ -113,7 +113,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
@@ -137,8 +137,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 50M
+          memory: 10M
     security_opt:
       - "no-new-privileges=true"
 
