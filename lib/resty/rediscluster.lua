@@ -230,9 +230,7 @@ function _M.fetch_slots(self)
 
     -- if a cached serv_list is present, start with that
     if serv_list_cached then
-        if not serv_list_combined then
-            serv_list_combined = {}
-        end
+        serv_list_combined = {}
 
         for i, s in ipairs(serv_list_cached.serv_list) do
             table_insert(serv_list_combined, i, s)
