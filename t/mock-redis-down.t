@@ -5,7 +5,12 @@ use Cwd qw(cwd);
 
 repeat_each(2);
 
-plan tests => repeat_each() * (6 * blocks());
+my $redis_auth = $ENV{REDIS_AUTH};
+if (defined($redis_auth) && $redis_auth eq "no") {
+    plan tests => repeat_each() * (6 * blocks());
+} else {
+    plan(skip_all => "skip when REDIS_AUTH is enabled");
+}
 
 my $pwd = cwd();
 
