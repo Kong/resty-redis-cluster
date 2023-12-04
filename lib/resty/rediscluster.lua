@@ -230,7 +230,11 @@ function _M.fetch_slots(self)
 
     -- if a cached serv_list is present, start with that
     if serv_list_cached then
-        serv_list_combined = serv_list_cached.serv_list
+        serv_list_combined = {}
+
+        for i, s in ipairs(serv_list_cached.serv_list) do
+            table_insert(serv_list_combined, i, s)
+        end
 
         -- then prepend the serv_list from config, in the event that the entire
         -- config serv_list no longer points to anything usable, try the cached IPs
@@ -242,6 +246,7 @@ function _M.fetch_slots(self)
         serv_list_combined = serv_list
     end
 
+    ngx.log(ngx.DEBUG, "fetching slots from: ", #serv_list_combined, " servers")
     -- important!
     serv_list_cached = nil -- luacheck: ignore
 
