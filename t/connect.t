@@ -113,10 +113,10 @@ qr/failed to connect, err: too many waiting connect operations/
 
             }
 
+            local redis = require "resty.rediscluster"
             local t = {}
             for i = 1, 100 do
                 local th = assert(ngx.thread.spawn(function(i)
-                    local redis = require "resty.rediscluster"
                     local red, err = redis:new(config)
 
                     if err then
@@ -128,21 +128,30 @@ qr/failed to connect, err: too many waiting connect operations/
                     red:hmset("animals", { dog = "bark", cat = "meow", cow = "moo" })
 
                     local res, err = red:commit_pipeline()
-                    if err then
-                        ngx.say(err)
-                        return
-                    end
+                    return res, err
                 end, i))
                 table.insert(t, th)
             end
+            local tok, res, err
             for i, th in ipairs(t) do
-                ngx.thread.wait(th)
+                tok, res, err = ngx.thread.wait(th)
+                if not tok then
+                    ngx.say(i, " failed to wait thread " .. i)
+                end
+                if not res then
+                    ngx.say(i, " err = ", err)
+
+                else
+                    ngx.say(i, " res = ", tostring(res[1]))
+                end
             end
         ';
     }
 --- request
 GET /t
 --- response_body eval
-qr/failed to connect, err: timeout/
+[qr/failed to connect, err: timeout/, qr/\d res = OK/]
 --- error_log eval
 qr/lua tcp socket queued connect timed out/
+--- timeout: 10s
+--- wait: 1
