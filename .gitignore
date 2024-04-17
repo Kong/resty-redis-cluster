@@ -38,3 +38,6 @@ luacov*
 *.out
 t/servroot
 *.rock
+
+# IDE
+.vscode/
