@@ -30,14 +30,17 @@ local DEFAULT_SEND_TIMEOUT = 1000
 local DEFAULT_READ_TIMEOUT = 1000
 
 local function parse_key(key_str)
-    local left_tag_single_index = string_find(key_str, "{", 0)
-    local right_tag_single_index = string_find(key_str, "}", 0)
-    if left_tag_single_index and right_tag_single_index then
-        --parse hashtag
-        return key_str.sub(key_str, left_tag_single_index + 1, right_tag_single_index - 1)
-    else
+    local left_tag_single_index = string_find(key_str, "{", 1)
+    if not left_tag_single_index then
         return key_str
     end
+
+    local right_tag_single_index = string_find(key_str, "}", left_tag_single_index + 1)
+    if right_tag_single_index then
+        --parse hashtag
+        return key_str.sub(key_str, left_tag_single_index + 1, right_tag_single_index - 1)
+    end
+    return key_str
 end
 
 
