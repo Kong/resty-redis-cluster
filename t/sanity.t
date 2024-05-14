@@ -1039,42 +1039,11 @@ cow: moo
     location /t {
         content_by_lua '
 
-            local config = {
-                            name = "testCluster",                   --rediscluster name
-                            serv_list = {                           --redis cluster node list(host and port),
-                                            { ip = "127.0.0.1", port = 6371 },
-                                            { ip = "127.0.0.1", port = 6372 },
-                                            { ip = "127.0.0.1", port = 6373 },
-                                            { ip = "127.0.0.1", port = 6374 },
-                                            { ip = "127.0.0.1", port = 6375 },
-                                            { ip = "127.0.0.1", port = 6376 }
-                                        },
-                            keepalive_timeout = 60000,              --redis connection pool idle timeout
-                            keepalive_cons = 1000,                  --redis connection pool size
-                            connect_timeout = 1000,               --timeout while connecting
-                            read_timeout = 1000,                    --timeout while reading
-                            send_timeout = 1000,                    --timeout while sending
-                            max_redirection = 5,                    --maximum retry attempts for redirection
-                            connect_opts = {
-                                                backlog = 30,
-                                                pool_size = 30,
-                                                ssl = false,
-                                                ssl_verify = false,
-                                            },
-
-            }
-
             local redis = require "resty.rediscluster";
-            local red, err = redis:new(config);
-
-            if err then
-                ngx.say("failed to create: ", err);
-                return
-            end
 
             local keys = {"foo{bar}hi", "foo}bar{hello", "foobar"};
             for _, key in ipairs(keys) do
-                ngx.say("parsed_key: ", red:parse_key(key));
+                ngx.say("parsed_key: ", redis.parse_key(key));
             end
         ';
     }
