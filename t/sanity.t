@@ -1033,7 +1033,9 @@ cow: moo
 --- no_error_log
 [error]
 
-=== TEST 15: parse key should work well
+
+
+=== TEST 15:  parse cluster hash tags as redis spec
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
