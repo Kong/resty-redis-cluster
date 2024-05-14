@@ -41,7 +41,7 @@ local function parse_key(key_str)
     end
 
     local right_tag_single_index = string_find(key_str, "}", left_tag_single_index + 1)
-    if right_tag_single_index then
+    if right_tag_single_index and right_tag_single_index > left_tag_single_index + 1 then
         return key_str.sub(key_str, left_tag_single_index + 1, right_tag_single_index - 1)
     end
     return key_str
