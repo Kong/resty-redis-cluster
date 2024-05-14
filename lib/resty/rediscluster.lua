@@ -790,6 +790,9 @@ function _M.cancel_pipeline(self)
     self._reqs = nil
 end
 
+function _M.parse_key(_, key)
+    return parse_key(key)
+end
 local function _do_eval_cmd(self, cmd, ...)
 --[[
 eval command usage:
