@@ -29,28 +29,34 @@ local DEFAULT_CONNECTION_TIMEOUT = 1000
 local DEFAULT_SEND_TIMEOUT = 1000
 local DEFAULT_READ_TIMEOUT = 1000
 
--- According to the Redis documentation, the hash tag is found only if the '{' and '}'
--- are exist in the key, or it should use the whole key to calculate the slot.
--- See: redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/#hash-tags.
---
--- For the Redis hash slot implemetation, see: https://github.com/redis/redis/blob/8a05f0092b0e291498b8fdb8dd93355467ceab25/src/cluster.c#L30-L49
-local function parse_key(key_str)
-    local left_tag_single_index = string_find(key_str, "{", 1)
-    if not left_tag_single_index then
-        return key_str
-    end
-
-    local right_tag_single_index = string_find(key_str, "}", left_tag_single_index + 1)
-    if right_tag_single_index and right_tag_single_index > left_tag_single_index + 1 then
-        return key_str.sub(key_str, left_tag_single_index + 1, right_tag_single_index - 1)
-    end
-    return key_str
-end
-
+local LEFT_BRACKET = "{"
+local RIGHT_BRACKET = "}"
 
 local _M = {}
 
 local mt = { __index = _M }
+
+
+-- According to the Redis documentation, the hash tag is found only if the '{' and '}'
+-- are exist in the key, or it should use the whole key to calculate the slot.
+-- See: https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/#hash-tags
+--
+-- For the Redis hash slot implemetation, see: https://github.com/redis/redis/blob/8a05f0092b0e291498b8fdb8dd93355467ceab25/src/cluster.c#L30-L49
+local function parse_key(key_str)
+    local left_index = string_find(key_str, LEFT_BRACKET, 1, true)
+    if not left_index then
+        return key_str
+    end
+
+    local right_index = string_find(key_str, RIGHT_BRACKET, left_index + 1, true)
+    if right_index and right_index > left_index + 1 then
+        return key_str:sub(left_index + 1, right_index - 1)
+    end
+    return key_str
+end
+-- export for testing
+_M.parse_key = parse_key
+
 
 local slot_cache = {}
 local master_nodes = {}
@@ -794,7 +800,7 @@ function _M.cancel_pipeline(self)
     self._reqs = nil
 end
 
-_M.parse_key = parse_key
+
 local function _do_eval_cmd(self, cmd, ...)
 --[[
 eval command usage:
