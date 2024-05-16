@@ -1032,3 +1032,32 @@ cat: meow
 cow: moo
 --- no_error_log
 [error]
+
+
+
+=== TEST 15:  parse cluster hash tags as redis spec
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+
+            local redis = require "resty.rediscluster";
+
+            local keys = {"{foobar}", "foo{bar}hi", "foo}bar{hello", "foobar", "foo{}{bar}", "foo{{bar}}", "foo{bar}{zap}"};
+            for _, key in ipairs(keys) do
+                ngx.say("parsed_key: ", redis.parse_key(key));
+            end
+        ';
+    }
+--- request
+GET /t
+--- response_body
+parsed_key: foobar
+parsed_key: bar
+parsed_key: foo}bar{hello
+parsed_key: foobar
+parsed_key: foo{}{bar}
+parsed_key: {bar
+parsed_key: bar
+--- no_error_log
+[error]
