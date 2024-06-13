@@ -1,6 +1,8 @@
 local redis = require "resty.redis"
 local resty_lock = require "resty.lock"
 local xmodem = require "resty.xmodem"
+local new_tab = require "table.new"
+
 local setmetatable = setmetatable
 local tostring = tostring
 local string = string
@@ -13,19 +15,22 @@ local pairs = pairs
 local unpack = unpack
 local ipairs = ipairs
 local tonumber = tonumber
-local match = string.match
-local char = string.char
+local string_sub = string.sub
 local table_insert = table.insert
 local table_concat = table.concat
 local string_find = string.find
 local redis_crc = xmodem.redis_crc
 
+local re_match = ngx.re.match
 local ngx_log = ngx.log
-local ngx_err = ngx.ERR
-local ngx_notice = ngx.NOTICE
-local ngx_info = ngx.INFO
-local ngx_debug = ngx.DEBUG
+local NGX_ERR = ngx.ERR
+local NGX_WARN = ngx.WARN
+local NGX_NOTICE = ngx.NOTICE
+local NGX_INFO = ngx.INFO
+local NGX_DEBUG = ngx.DEBUG
 
+-- cluster's key space is split into 16384 slots
+local REDIS_SLOTS_TOTAL = 16384
 
 local DEFAULT_SHARED_DICT_NAME = "redis_cluster_slot_locks"
 local DEFAULT_REFRESH_DICT_NAME = "refresh_lock"
@@ -41,8 +46,23 @@ local LEFT_BRACKET = "{"
 local RIGHT_BRACKET = "}"
 
 local _M = {}
-
 local mt = { __index = _M }
+
+-- Redis 7.x and Redis 6.x use different slots format
+local redis7_with_host
+
+local slot_cache = {}
+local master_nodes = {}
+
+local cmds_for_all_master = {
+    ["flushall"] = true,
+    ["flushdb"] = true
+}
+
+local cluster_invalid_cmds = {
+    ["config"] = true,
+    ["shutdown"] = true
+}
 
 
 -- According to the Redis documentation, the hash tag is found only if the '{' and '}'
@@ -65,57 +85,9 @@ end
 -- export for testing
 _M.parse_key = parse_key
 
--- Redis 7.x and Redis 6.x use different slots format
-local redis7_with_host
-
-local slot_cache = {}
-local master_nodes = {}
-
-local cmds_for_all_master = {
-    ["flushall"] = true,
-    ["flushdb"] = true
-}
-
-local cluster_invalid_cmds = {
-    ["config"] = true,
-    ["shutdown"] = true
-}
-
 
 local function redis_slot(str)
     return redis_crc(parse_key(str))
-end
-
-
-local function check_auth(self, redis_client)
-    -- redis before 6.0
-    if type(self.config.auth) == "string" then
-        local count, err = redis_client:get_reused_times()
-        if not count then
-            return nil, "failed getting reused count: " .. tostring(err)
-        elseif count > 0 then
-            return true, nil -- reusing the connection, so already authenticated
-        end
-        return redis_client:auth(self.config.auth)
-
-    -- redis 6.x adds support for username+password combination
-    elseif type(self.config.password) == "string" then
-        local count, err = redis_client:get_reused_times()
-        if not count then
-            return nil, "failed getting reused count: " .. tostring(err)
-        elseif count > 0 then
-            return true, nil -- reusing the connection, so already authenticated
-        end
-
-        if type(self.config.username) == "string" then
-            return redis_client:auth(self.config.username, self.config.password)
-        else
-            return redis_client:auth(self.config.password)
-        end
-
-    else
-        return true, nil
-    end
 end
 
 
@@ -123,8 +95,123 @@ local function release_connection(red, config)
     local ok,err = red:set_keepalive(config.keepalive_timeout
             or DEFAULT_KEEPALIVE_TIMEOUT, config.keepalive_cons or DEFAULT_KEEPALIVE_CONS)
     if not ok then
-        ngx_log(ngx_err,"set keepalive failed:", err)
+        ngx_log(NGX_ERR, "set keepalive failed: ", err)
     end
+end
+
+
+local check_auth
+do
+    local function check_reused(redis_client)
+        local count, err = redis_client:get_reused_times()
+        if err then
+            return nil, "failed to get reused count: " .. tostring(err)
+        end
+
+        if count > 0 then
+            return true, nil -- reusing the connection, so already authenticated
+        else
+            return nil, nil -- new connection
+        end
+    end
+
+    check_auth = function(self, redis_client)
+        if not redis_client then
+            return nil, "redis_client can not be nil"
+        end
+
+        -- redis < 6.0
+        if type(self.config.auth) == "string" then
+            local ok, err = check_reused(redis_client)
+            if err then
+                return nil, err
+            end
+            if ok then
+                return true, nil
+            end
+
+            return redis_client:auth(self.config.auth)
+
+        -- redis 6.x adds support for username+password combination
+        elseif type(self.config.password) == "string" then
+            local ok, err = check_reused(redis_client)
+            if err then
+                return nil, err
+            end
+            if ok then
+                return true, nil
+            end
+
+            if type(self.config.username) == "string" then
+                return redis_client:auth(self.config.username, self.config.password)
+
+            else
+                return redis_client:auth(self.config.password)
+            end
+
+        else
+            return true, nil
+        end
+    end
+end
+
+
+local function check_status(self, redis_client)
+    if not redis_client then
+        return nil, "redis_client can not be nil"
+    end
+
+    local info, err = redis_client:cluster("info")
+    if err then
+        return nil, "failed to fetch cluster info: " .. err
+    end
+
+    local state
+    state, err = re_match(info, "cluster_state:([a-zA-Z]+)\r\n", "jo")
+    if err then
+        return nil, "PCRE regular expression error: " .. err
+    end
+    if not state then
+        return nil, "failed to match cluster state"
+    end
+
+    if state[1] == "fail" then
+        return nil, "cluster state: fail"
+    end
+    if state[1] == "ok" then
+        return true, nil
+    end
+end
+
+
+local function check_version(self, redis_client)
+    if not redis_client then
+        return nil, "redis_client can not be nil"
+    end
+
+    local server_info, err = redis_client:info("server")
+    if err then
+        return nil, "failed to fetch server info: " .. err
+    end
+
+    -- retrieve only the major.minor
+    local version
+    version, err = re_match(server_info, [[redis_version:(\d+\.\d+)\.\d+.*?\r\n]], "jo")
+    if err then
+        return nil, "PCRE regular expression error: " .. err
+    end
+    if not version then
+        return nil, "failed to match version info"
+    end
+
+    ngx_log(NGX_INFO, "redis version: ", version[1])
+    if tonumber(version[1]) >= 8.0 then
+        -- Redis 8.0 is not yet released
+        -- print a debug message just in case slot format is changed
+        ngx_log(NGX_WARN, "redis version 8.x detected, comptability not guaranteed")
+    end
+
+    return true, nil
 end
 
 
@@ -134,6 +221,159 @@ local function split(s, delimiter)
         table_insert(result, m);
     end
     return result;
+end
+
+
+-- cache only IPs
+local function parse_masters(self, redis_client)
+    if not redis_client then
+        return nil, "redis_client can not be nil"
+    end
+
+    local nodes, err = redis_client:cluster("nodes")
+    if not nodes then
+        return nil, "failed to fetch nodes: " .. err
+    end
+
+    -- must be a fresh table
+    local master_list = {}
+
+    -- bf7d28ccd79ca000547b8d6dfc042ca08b5d8b1a 172.26.0.25:6379@16379 slave 86bc3b462782f48ee2b56939107744a792dc3575 0 1718355186000 1 connected
+    -- 79f6be094052b48c63967bc494e493a739016305 172.26.0.26:6379@16379 slave 438d9bc4c865e342a0a6dd1b560ac5d3f0c92662 0 1718355186000 2 connected
+    -- 72d111446f11ee900df33f8a91425bb6533be0b6 172.26.0.23:6379@16379 master - 0 1718355187000 3 connected 10923-16383
+    -- 438d9bc4c865e342a0a6dd1b560ac5d3f0c92662 172.26.0.22:6379@16379 master - 0 1718355186902 2 connected 5461-10922
+    -- 0e0da2991a4f713691c209ba2b7467d2a8223e9c 172.26.0.24:6379@16379 slave 72d111446f11ee900df33f8a91425bb6533be0b6 0 1718355187920 3 connected
+    -- 86bc3b462782f48ee2b56939107744a792dc3575 172.26.0.21:6379@16379 myself,master - 0 1718355182000 1 connected 0-5460
+    local node_list = split(nodes, "\n")
+    for _, node in ipairs(node_list) do
+        local node_info = split(node, " ")
+        if #node_info > 2 then
+            local is_master = string_find(node_info[3], "master", 1, true) ~= nil
+            if is_master then
+                -- 172.26.0.21:6379
+                local ip_port_str = split(node_info[2], "@")[1]
+                local ip_port = split(ip_port_str, ":")
+                table_insert(master_list, {
+                    ip = ip_port[1],
+                    port = tonumber(ip_port[2])
+                })
+            end
+        end
+    end
+
+    master_nodes[self.config.name .. "master_list"] = master_list
+
+    return true
+end
+
+
+local function parse_slots(self, redis_client)
+    if not redis_client then
+        return nil, "redis_client can not be nil"
+    end
+
+    local slots_data, err = redis_client:cluster("slots")
+    if not slots_data then
+        return nil, "failed to fetch slots: " .. err
+    end
+
+    -- mapping from slots to IPs and/or hostnames of servers
+    local slots = new_tab(0, REDIS_SLOTS_TOTAL)
+
+    -- must be a fresh table
+    local master_list = {}
+
+    -- cache the complete list of servers present in cluster
+    -- while the cluster is resharding (adding/removing nodes)
+    -- this can differ from self.config.serv_list
+    local servers = { serv_list = {} }
+
+    for i = 1, #slots_data do
+        -- Redis 6: { 0, 5460, { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }, { "172.26.0.25", 6379, "20d96bc4a640fd244699e29274b2c94962def80e" } }
+        -- Redis 7: { 0, 5460, { "rc-node-1", 6379, "3a4f2814802ca25a5c92dfc167674802126557d3", { "ip", "172.26.0.11" } }, { "rc-node-5", 6379, "f14b2cf710613f517374aefe7b84d9f013102ebe", { "ip", "172.26.0.15" } } }
+        -- Redis 7: { 0, 5460, { "172.26.0.11", 6379, "64ff3bc4e8f4587c92bcfaa6c085e67417d44d5d", {} }, { "172.26.0.15", 6379, "9a63c473b928203b141d20a46be6784eb320ba0c", {} } }
+        --
+        -- data of a slots range like `[0, 5460]`
+        local sub_range_data = slots_data[i]
+
+        -- item 1 and 2 are the start slot and end slot
+        local start_slot, end_slot = sub_range_data[1], sub_range_data[2]
+
+        -- cache the servers responsible for [start_slot, end_slot]
+        local sub_range_servers = { serv_list = {} }
+
+        if #sub_range_data == 3 then
+            ngx_log(NGX_INFO, "only master node present in slots info but able to continue")
+        end
+        -- retrieve the list of servers (including IPs and/or hostnames) for [start_slot, end_slot]
+        for j = 3, #sub_range_data do
+            -- Redis 6: { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }
+            -- Redis 7: { "rc-node-1", 6379, "3a4f2814802ca25a5c92dfc167674802126557d3", { "ip", "172.26.0.11" } }
+            -- Redis 7: { "172.26.0.11", 6379, "64ff3bc4e8f4587c92bcfaa6c085e67417d44d5d", {} }
+            local server_info = sub_range_data[j]
+
+            local server_hostname_or_ip, server_port = server_info[1], tostring(server_info[2])
+
+            local server_ip
+            -- Redis 6: nil
+            -- Redis 7: { "ip", "172.26.0.11" }
+            -- Redis 7: {}
+            local ip_tab = server_info[4]
+            if ip_tab and type(ip_tab) == "table" and next(ip_tab) then
+                server_ip = ip_tab[2]
+            end
+            if server_ip and server_ip ~= server_hostname_or_ip then
+                redis7_with_host = true
+
+                -- prioritize IP address over hostname as IP does not suffer from stale DNS cache
+                local ip_port = { ip = server_ip, port = server_port }
+
+                table_insert(sub_range_servers.serv_list, ip_port)
+                table_insert(servers.serv_list, ip_port)
+
+                -- master node is returned before slave nodes
+                if j == 3 then
+                    table_insert(master_list, ip_port)
+                end
+
+            else
+
+                redis7_with_host = false
+            end
+
+            local hostname_port = { ip = server_hostname_or_ip, port = server_port }
+
+            table_insert(sub_range_servers.serv_list, hostname_port)
+            table_insert(servers.serv_list, hostname_port)
+
+            -- master node is returned before slave nodes
+            -- only insert this if not inserted above
+            if not redis7_with_host and j == 3 then
+                table_insert(master_list, hostname_port)
+            end
+        end
+
+        -- sub_range_servers.serv_list:
+        -- { { "172.26.0.11", 6379 }, { "rc-node-1", 6379 },
+        --   { "172.26.0.14", 6379 }, { "rc-node-4", 6379 },
+        --   { "172.26.0.17", 6379 }, { "rc-node-7", 6379 },
+        -- }
+        --
+        -- ngx_log(NGX_NOTICE, "sub_range_servers.serv_list = ", require "inspect"(sub_range_servers.serv_list))
+
+        for slot = start_slot, end_slot do
+            slots[slot] = sub_range_servers
+        end
+    end
+
+    slot_cache[self.config.name] = slots
+    -- servers.serv_list is the sum of all sub_range_servers.serv_list
+    slot_cache[self.config.name .. "serv_list"] = servers
+
+    master_nodes[self.config.name .. "master_list"] = master_list
+
+    ngx_log(NGX_DEBUG, "finished initializing slot cache")
+    return true
 end
 
 
@@ -160,121 +400,59 @@ local function try_hosts_slots(self, serv_list)
             -- for each ip:port pair, we try at least once before check total timeout
             ok, err = redis_client:connect(ip, port, self.config.connect_opts)
             if ok then break end
-            if err then
-                ngx_log(ngx_err, "unable to connect, attempt nr ", k, " : error: ", err)
-                table_insert(errors, err)
-            end
+            ngx_log(NGX_ERR, "unable to connect ip:port " .. ip .. ":" .. port .. ", attempt ", k, ", error: ", err)
+            table_insert(errors, err)
 
             -- Kong currently does not configure 'max_connection_timeout'
             local total_connection_time_ms = (ngx.now() - start_time) * 1000
             if (config.max_connection_timeout and total_connection_time_ms > config.max_connection_timeout) then
                 max_connection_timeout_err = "max_connection_timeout of " .. config.max_connection_timeout .. "ms reached."
-                ngx_log(ngx_err, max_connection_timeout_err)
+                ngx_log(NGX_ERR, max_connection_timeout_err)
                 table_insert(errors, max_connection_timeout_err)
-                break
+                return nil, errors
             end
         end
 
         if ok then
-            local _, autherr = check_auth(self, redis_client)
-            if autherr then
+            local _, auth_err = check_auth(self, redis_client)
+            if auth_err then
                 redis_client:close()
-                table_insert(errors, autherr)
+                table_insert(errors, auth_err)
                 return nil, errors
             end
 
-            -- cache cluster slots
-            local slots_info
-            slots_info, err = redis_client:cluster("slots")
-            if slots_info then
-                local slots = {}
-                -- while slots are updated, create a list of servers present in cluster
-                -- this can differ from self.config.serv_list if a cluster is resized (added/removed nodes)
-                local servers = { serv_list = {} }
-                for n = 1, #slots_info do
-                    -- Redis 6: { 0, 5460, { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }, { "172.26.0.25", 6379, "20d96bc4a640fd244699e29274b2c94962def80e" } }
-                    -- Redis 7: { 0, 5460, { "rc-node-1", 6379, "3a4f2814802ca25a5c92dfc167674802126557d3", { "ip", "172.26.0.11" } }, { "rc-node-5", 6379, "f14b2cf710613f517374aefe7b84d9f013102ebe", { "ip", "172.26.0.15" } } }
-                    -- Redis 7: { 0, 5460, { "172.26.0.11", 6379, "64ff3bc4e8f4587c92bcfaa6c085e67417d44d5d", {} }, { "172.26.0.15", 6379, "9a63c473b928203b141d20a46be6784eb320ba0c", {} } }
-                    local sub_info = slots_info[n]
-                    -- slot info item 1 and 2 are the subrange start end slots
-                    local start_slot, end_slot = sub_info[1], sub_info[2]
-
-                    -- generate new list of servers, including IPs and hostnames
-                    local sub_info_j
-                    local sub_info_j_ip
-                    for j = 3, #sub_info do
-                        -- Redis 6: { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }
-                        -- Redis 7: { "rc-node-1", 6379, "3a4f2814802ca25a5c92dfc167674802126557d3", { "ip", "172.26.0.11" } }
-                        -- Redis 7: { "172.26.0.11", 6379, "64ff3bc4e8f4587c92bcfaa6c085e67417d44d5d", {} }
-                        sub_info_j = sub_info[j]
-                        -- Redis 6: nil
-                        -- Redis 7: { "ip", "172.26.0.11" }
-                        -- Redis 7: {}
-                        sub_info_j_ip = sub_info_j[4]
-                        if sub_info_j_ip and type(sub_info_j_ip) == "table" and
-                           next(sub_info_j_ip) and sub_info_j_ip[2] ~= sub_info_j[1]
-                        then
-                            redis7_with_host = true
-                            -- prioritize IP address over hostname as IP does not suffer from stale DNS cache
-                            servers.serv_list[#servers.serv_list + 1] = { ip = sub_info_j_ip[2], port = sub_info_j[2] }
-                        else
-                            redis7_with_host = false
-                        end
-                        servers.serv_list[#servers.serv_list + 1] = { ip = sub_info_j[1], port = sub_info_j[2] }
-                    end
-
-                    for slot = start_slot, end_slot do
-                        -- todo: there is no need to create the 'list', as all the slots
-                        -- within [start_slot, end_slot] share the same 'servers'.
-                        -- just do: slots[slot] = servers
-                        local list = { serv_list = {} }
-                        -- from 3, here lists the host/port/nodeid of in charge nodes
-                        for j = 3, #sub_info do
-                            sub_info_j = sub_info[j]
-                            sub_info_j_ip = sub_info_j[4]
-                            if sub_info_j_ip and type(sub_info_j_ip) == "table" and
-                               next(sub_info_j_ip) and sub_info_j_ip[2] ~= sub_info_j[1]
-                            then
-                                -- prioritize IP address over hostname as IP does not suffer from stale DNS cache
-                                list.serv_list[#list.serv_list + 1] = { ip = sub_info_j_ip[2], port = sub_info_j[2] }
-                            end
-                            list.serv_list[#list.serv_list + 1] = { ip = sub_info_j[1], port = sub_info_j[2] }
-
-                            slots[slot] = list
-                        end
-                    end
-                end
-                ngx_log(ngx_debug, "finished initializing slotcache ...")
-                slot_cache[self.config.name] = slots
-                slot_cache[self.config.name .. "serv_list"] = servers
-            else
-                ngx_log(ngx_debug, "failed to initialize slotcache")
+            -- ensure cluster status is ok
+            local _, status_err = check_status(self, redis_client)
+            if status_err then
                 redis_client:close()
-                table_insert(errors, err)
+                table_insert(errors, status_err)
                 return nil, errors
             end
 
-            -- cache master nodes
-            local nodes_res, nerr = redis_client:cluster("nodes")
-            if nodes_res then
-                local nodes_info = split(nodes_res, char(10))
-                for _, node in ipairs(nodes_info) do
-                    local node_info = split(node, " ")
-                    if #node_info > 2 then
-                        local is_master = match(node_info[3], "master") ~= nil
-                        if is_master then
-                            local ip_port = split(split(node_info[2], "@")[1], ":")
-                            table_insert(master_nodes, {
-                                ip = ip_port[1],
-                                port = tonumber(ip_port[2])
-                            })
-                        end
-                    end
-                end
-            else
-                ngx_log(ngx_debug, "failed to fetch master nodes")
+            local _, version_err = check_version(self, redis_client)
+            if version_err then
                 redis_client:close()
-                table_insert(errors, nerr)
+                table_insert(errors, version_err)
+                return nil, errors
+            end
+
+            -- cache master nodes before slots
+            -- give the cluster a chance to spread gossip info
+            -- todo: will deprecate this by function 'parse_slots()'
+            local _, masters_err = parse_masters(self, redis_client)
+            if masters_err then
+                ngx_log(NGX_DEBUG, "failed to initialize masters cache")
+                redis_client:close()
+                table_insert(errors, masters_err)
+                return nil, errors
+            end
+
+            -- cache slots
+            local _, slots_err = parse_slots(self, redis_client)
+            if slots_err then
+                ngx_log(NGX_DEBUG, "failed to initialize slots cache")
+                redis_client:close()
+                table_insert(errors, slots_err)
                 return nil, errors
             end
 
@@ -282,19 +460,10 @@ local function try_hosts_slots(self, serv_list)
             release_connection(redis_client, config)
 
             -- refresh of slots and master nodes successful
-            -- not required to connect/iterate over additional hosts
-            if nodes_res and slots_info then
-                return true, nil
-            end
-        elseif max_connection_timeout_err then
-            break
-        else
-            table_insert(errors, err)
-        end
-        if #errors == 0 then
             return true, nil
         end
     end
+
     return nil, errors
 end
 
@@ -319,44 +488,59 @@ function _M.fetch_slots(self)
         for i, s in ipairs(serv_list) do
             table_insert(serv_list_combined, i, s)
         end
+
     else
         -- otherwise we bootstrap with our serv_list from config
         serv_list_combined = serv_list
     end
 
-    ngx_log(ngx_debug, "fetching slots from: ", #serv_list_combined, " servers")
+    ngx_log(NGX_DEBUG, "fetching slots from: ", #serv_list_combined, " servers")
     -- important!
     serv_list_cached = nil -- luacheck: ignore
 
     local _, errors = try_hosts_slots(self, serv_list_combined)
     if errors then
         local err = "failed to fetch slots: " .. table_concat(errors, ";")
-        ngx_log(ngx_err, err)
+        ngx_log(NGX_ERR, err)
         return nil, err
     end
 end
 
 
-function _M.refresh_slots(self)
-    local worker_id = ngx.worker.id()
-    local lock, err, elapsed, ok
-    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, {time_out = 0})
+local function unlock(self, lock, msg)
     if not lock then
-        ngx_log(ngx_err, "failed to create lock in refresh slot cache: ", err)
+        return nil, "lock can not be nil"
+    end
+
+    local ok, err = lock:unlock()
+    if not ok then
+        return nil, "failed to unlock in " .. msg .. " slot cache: " .. err
+    end
+
+    return true, nil
+end
+
+
+function _M.refresh_slots(self)
+    local lock, err, elapsed
+    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { time_out = 0 })
+    if not lock then
+        ngx_log(NGX_ERR, "failed to create lock in refreshing slot cache: ", err)
         return nil, err
     end
 
+    local worker_id = ngx.worker.id()
     local refresh_lock_key = (self.config.refresh_lock_key or DEFAULT_REFRESH_DICT_NAME) .. worker_id
     elapsed, err = lock:lock(refresh_lock_key)
     if not elapsed then
-        return nil, 'race refresh lock fail, ' .. err
+        ngx_log(NGX_ERR, "failed to acquire the lock in refreshing slot cache: ", err)
+        return nil,  err
     end
 
-    self:fetch_slots()
-    ok, err = lock:unlock()
-    if not ok then
-        ngx_log(ngx_err, "failed to unlock in refresh slot cache:", err)
-        return nil, err
+    local _, fetch_err = self:fetch_slots()
+    unlock(self, lock, "refreshing")
+    if fetch_err then
+        return nil, fetch_err
     end
 end
 
@@ -366,42 +550,43 @@ function _M.init_slots(self)
         -- already initialized
         return true
     end
-    local ok, lock, elapsed, err
+
+    local lock, elapsed, err
     lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME)
     if not lock then
-        ngx_log(ngx_err, "failed to create lock in initialization slot cache: ", err)
+        ngx_log(NGX_ERR, "failed to create lock in initializing slot cache: ", err)
         return nil, err
     end
 
     elapsed, err = lock:lock("redis_cluster_slot_" .. self.config.name)
     if not elapsed then
-        ngx_log(ngx_err, "failed to acquire the lock in initialization slot cache: ", err)
+        ngx_log(NGX_ERR, "failed to acquire the lock in initializing slot cache: ", err)
         return nil, err
     end
 
     if slot_cache[self.config.name] then
-        ok, err = lock:unlock()
-        if not ok then
-            ngx_log(ngx_err, "failed to unlock in initialization slot cache: ", err)
-        end
+        unlock(self, lock, "initializing")
         -- already initialized
         return true
     end
 
-    local _, errs = self:fetch_slots()
-    if errs then
-        ok, err = lock:unlock()
-        if not ok then
-            ngx_log(ngx_err, "failed to unlock in initialization slot cache:", err)
-        end
-        return nil, errs
-    end
-    ok, err = lock:unlock()
+    local errors = {}
+    local ok
+    ok, err = self:fetch_slots()
     if not ok then
-        ngx_log(ngx_err, "failed to unlock in initialization slot cache:", err)
+        table_insert(errors, err)
+    end
+
+    ok, err = unlock(self, lock, "initializing")
+    if not ok then
+        table_insert(errors, err)
+    end
+
+    if #errors > 0 then
+        return nil, table_concat(errors, ",")
     end
     -- initialized
-    return true
+    return true, nil
 end
 
 
@@ -423,38 +608,44 @@ function _M.new(_, config)
 end
 
 
-local function pick_node(self, serv_list, magic_radom_seed, ip_or_host)
+local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index)
     local host
     local port
     local slave
     local index
 
-    if #serv_list < 1 then
+    if not serv_list or #serv_list < 1 then
+        if slot then
+            ngx_log(NGX_DEBUG, "pick node for slot " .. tostring(slot))
+        end
         return nil, nil, nil, "serv_list is empty"
     end
 
-    if magic_radom_seed and type(magic_radom_seed) ~= "number" then
-        return nil, nil, nil, "magic_radom_seed must be a number"
+    if magic_random_seed and type(magic_random_seed) ~= "number" then
+        return nil, nil, nil, "magic_random_seed must be a number"
     end
 
-    if ip_or_host then
-        if type(ip_or_host) ~= "number" then
-            return nil, nil, nil, "ip_or_host must be a number"
+    if ip_host_index then
+        if type(ip_host_index) ~= "number" then
+            return nil, nil, nil, "ip_host_index must be a number"
         end
 
         -- 1: pick IP first
         -- 2: then pick hostname
-        ip_or_host = ip_or_host % 2
-        if ip_or_host == 0 then
-            ip_or_host = 2
+        ip_host_index = ip_host_index % 2
+        if ip_host_index == 0 then
+            ip_host_index = 2
         end
+
+    else
+        ip_host_index = 1
     end
 
     -- slave nodes can be picked; however
     -- Kong currently does not configure this option
     if self.config.enable_slave_read then
-        if magic_radom_seed then
-            index = magic_radom_seed % #serv_list
+        if magic_random_seed then
+            index = magic_random_seed % #serv_list
             if index == 0 then
                 index = #serv_list
             end
@@ -463,16 +654,18 @@ local function pick_node(self, serv_list, magic_radom_seed, ip_or_host)
         end
 
         -- cluster slots will always put the master node before slave nodes
-        -- serv_list: { { master_ip, master_port }, { master_host, master_port },
-        --              { slave_ip, slave_port }, { slave_host, slave_port },
-        --              { slave_ip, slave_port }, { slave_host, slave_port } }
+        -- serv_list:
+        -- { { master_ip, master_port }, { master_host, master_port },
+        --   { slave_ip, slave_port }, { slave_host, slave_port },
+        --   { slave_ip, slave_port }, { slave_host, slave_port },
+        -- }
         if redis7_with_host then
             -- pick IP
-            if ip_or_host == 1 and index % 2 == 0 then
+            if ip_host_index == 1 and index % 2 == 0 then
                 index = index - 1
             end
             -- pick hostname
-            if ip_or_host == 2 and index % 2 == 1 then
+            if ip_host_index == 2 and index % 2 == 1 then
                 index = index + 1
             end
 
@@ -485,7 +678,7 @@ local function pick_node(self, serv_list, magic_radom_seed, ip_or_host)
     -- only pick the master node (IP or hostname)
     else
         if redis7_with_host then
-            index = ip_or_host
+            index = ip_host_index
         else
             index = 1
         end
@@ -496,19 +689,18 @@ local function pick_node(self, serv_list, magic_radom_seed, ip_or_host)
     host = serv_list[index].ip
     port = serv_list[index].port
 
-    ngx_log(ngx_info, "index: " .. index .. ", pick node: ", host, ":", tostring(port))
+    ngx_log(NGX_INFO, "index: " .. index .. ", pick node: ", host, ":", tostring(port))
 
     return host, port, slave
 end
 
 
 local ask_host_and_port = {}
-
 local function parse_ask_signal(res)
     --ask signal sample:ASK 12191 127.0.0.1:7008, so we need to parse and get 127.0.0.1, 7008
     if res ~= ngx.null then
-        if type(res) == "string" and string.sub(res, 1, 3) == "ASK" then
-            local matched = ngx.re.match(res, [[^ASK [^ ]+ ([^:]+):([^ ]+)]], "jo", nil, ask_host_and_port)
+        if type(res) == "string" and string_sub(res, 1, 3) == "ASK" then
+            local matched = re_match(res, [[^ASK [^ ]+ ([^:]+):([^ ]+)]], "jo", nil, ask_host_and_port)
             if not matched then
                 return nil, nil
             end
@@ -516,8 +708,8 @@ local function parse_ask_signal(res)
         end
         if type(res) == "table" then
             for i = 1, #res do
-                if type(res[i]) == "string" and string.sub(res[i], 1, 3) == "ASK" then
-                    local matched = ngx.re.match(res[i], [[^ASK [^ ]+ ([^:]+):([^ ]+)]], "jo", nil, ask_host_and_port)
+                if type(res[i]) == "string" and string_sub(res[i], 1, 3) == "ASK" then
+                    local matched = re_match(res[i], [[^ASK [^ ]+ ([^:]+):([^ ]+)]], "jo", nil, ask_host_and_port)
                     if not matched then
                         return nil, nil
                     end
@@ -532,12 +724,12 @@ end
 
 local function has_moved_signal(res)
     if res ~= ngx.null then
-        if type(res) == "string" and string.sub(res, 1, 5) == "MOVED" then
+        if type(res) == "string" and string_sub(res, 1, 5) == "MOVED" then
             return true
         else
             if type(res) == "table" then
                 for i = 1, #res do
-                    if type(res[i]) == "string" and string.sub(res[i], 1, 5) == "MOVED" then
+                    if type(res[i]) == "string" and string_sub(res[i], 1, 5) == "MOVED" then
                         return true
                     end
                 end
@@ -553,8 +745,8 @@ local function generate_magic_seed(self)
     --alway want pick up specific 3 nodes for pipeline requests, instead of 9.
     --Currently we simply use (num of allnode)%count as a randomly fetch. Might consider a better way in the future.
     -- use the dynamic serv_list instead of the static config serv_list
-    local nodeCount = #slot_cache[self.config.name .. "serv_list"].serv_list
-    return math.random(nodeCount)
+    local node_count = #slot_cache[self.config.name .. "serv_list"].serv_list
+    return math.random(node_count)
 end
 
 
@@ -564,12 +756,12 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
     -- key will be passed to resty.redis
     local slot = redis_slot(tostring(key))
 
-    local magicRandomPickupSeed = generate_magic_seed(self)
+    local magic_random_seed = generate_magic_seed(self)
     local loop_counter = config.max_redirection or DEFAULT_MAX_REDIRECTION
 
     for k = 1, loop_counter do
         if k > 1 then
-            ngx_log(ngx_notice, "handle retry attempts:" .. k .. " for cmd:" .. cmd .. " key:" .. tostring(key))
+            ngx_log(NGX_NOTICE, "handle retry attempts:" .. k .. " for cmd:" .. cmd .. " key:" .. tostring(key))
         end
 
         local slots = slot_cache[self.config.name]
@@ -601,9 +793,9 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
             local tries = redis7_with_host and 2 or 1
             for i = 1, tries do
-                ip, port, slave, err = pick_node(self, serv_list, magicRandomPickupSeed, i)
+                ip, port, slave, err = pick_node(self, serv_list, slot, magic_random_seed, i)
                 if err then
-                    ngx_log(ngx_err, "pickup node failed, will return failed for this request, meanwhile refereshing slotcache " .. err)
+                    ngx_log(NGX_ERR, "pickup node failed, will return failed for this request, meanwhile refereshing slotcache " .. err)
                     self:refresh_slots()
                     return nil, err
                 end
@@ -614,10 +806,10 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
         end
 
         if ok then
-            local _, autherr = check_auth(self, redis_client)
-            if autherr then
+            local _, auth_err = check_auth(self, redis_client)
+            if auth_err then
                 redis_client:close()
-                return nil, autherr
+                return nil, auth_err
             end
             if slave then
                 --set readonly
@@ -650,20 +842,20 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             if err then
                 -- todo: we can follow the moved target instead of refreshing the slots
                 if has_moved_signal(res) then
-                    ngx_log(ngx_debug, "find MOVED signal, trigger retry for normal commands, cmd:" .. cmd .. " key:" .. tostring(key))
+                    ngx_log(NGX_DEBUG, "find MOVED signal, trigger retry for normal commands, cmd:" .. cmd .. " key:" .. tostring(key))
                     -- if retry with moved, we will not asking to specific ip:port anymore
                     target_ip = nil
                     target_port = nil
-                    local _, _, moved_ip, moved_port = string.find(err, "MOVED %d+ ([%w%.%-_]+):(%d+)")
+                    local _, _, moved_ip, moved_port = string_find(err, "MOVED %d+ ([%w%.%-_]+):(%d+)")
                     if moved_ip == tostring(ip) and moved_port == tostring(port) then
-                        ngx_log(ngx_debug, "nested moved redirection detected, refreshing slots ...")
+                        ngx_log(NGX_DEBUG, "nested moved redirection detected, refreshing slots ...")
                     end
                     redis_client:close()
                     self:refresh_slots()
                     need_to_retry = true
 
-                elseif string.sub(err, 1, 3) == "ASK" then
-                    ngx_log(ngx_debug, "handle asking for normal commands, cmd:" .. cmd .. " key:" .. tostring(key))
+                elseif string_sub(err, 1, 3) == "ASK" then
+                    ngx_log(NGX_DEBUG, "handle asking for normal commands, cmd:" .. cmd .. " key:" .. tostring(key))
                     if asking then
                         -- Should not happen after asking target ip:port and still return ask, if so, return error.
                         redis_client:close()
@@ -683,7 +875,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                         end
                     end
 
-                elseif string.sub(err, 1, 11) == "CLUSTERDOWN" then
+                elseif string_sub(err, 1, 11) == "CLUSTERDOWN" then
                     redis_client:close()
                     self:refresh_slots()
                     return nil, "Cannot executing command, cluster status is failed!"
@@ -714,17 +906,18 @@ end
 
 local function _do_cmd_master(self, cmd, key, ...)
     local errors = {}
-    for _, master in ipairs(master_nodes) do
+
+    for _, master in ipairs(master_nodes[self.config.name .. "master_list"]) do
         local redis_client = redis:new()
         redis_client:set_timeouts(self.config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   self.config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   self.config.read_timeout or DEFAULT_READ_TIMEOUT)
         local ok, err = redis_client:connect(master.ip, master.port, self.config.connect_opts)
         if ok then
-            local _, autherr = check_auth(self, redis_client)
-            if autherr then
+            local _, auth_err = check_auth(self, redis_client)
+            if auth_err then
                 redis_client:close()
-                return nil, autherr
+                return nil, auth_err
             end
 
             _, err = redis_client[cmd](redis_client, key, ...)
@@ -734,7 +927,11 @@ local function _do_cmd_master(self, cmd, key, ...)
             table_insert(errors, err)
         end
     end
-    return #errors == 0, table_concat(errors, ";")
+
+    if #errors > 0 then
+        return nil, table_concat(errors, ";")
+    end
+    return true, nil
 end
 
 local function _do_cmd(self, cmd, key, ...)
@@ -770,7 +967,7 @@ local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
             --deal with redis cluster ask redirection
             local ask_host, ask_port = parse_ask_signal(res[i])
             if ask_host ~= nil and ask_port ~= nil then
-                ngx_log(ngx_debug, "handle ask signal for cmd:" .. reqs[i]["cmd"] .. " key:" .. reqs[i]["key"] .. " target host:" .. ask_host .. " target port:" .. ask_port)
+                ngx_log(NGX_DEBUG, "handle ask signal for cmd:" .. reqs[i]["cmd"] .. " key:" .. reqs[i]["key"] .. " target host:" .. ask_host .. " target port:" .. ask_port)
                 local askres, err = handle_command_with_retry(self, ask_host, ask_port, true, reqs[i]["cmd"], reqs[i]["key"], unpack(reqs[i]["args"]))
                 if err then
                     return nil, err
@@ -778,7 +975,7 @@ local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
                     finalret[reqs[i].origin_index] = askres
                 end
             elseif has_moved_signal(res[i]) then
-                ngx_log(ngx_debug, "handle moved signal for cmd:" .. reqs[i]["cmd"] .. " key:" .. reqs[i]["key"])
+                ngx_log(NGX_DEBUG, "handle moved signal for cmd:" .. reqs[i]["cmd"] .. " key:" .. reqs[i]["key"])
                 if need_to_fetch_slots then
                     -- if there is multiple signal for moved, we just need to fetch slot cache once, and do retry.
                     self:refresh_slots()
@@ -803,7 +1000,8 @@ local function has_cluster_fail_signal_in_pipeline(res)
     for i = 1, #res do
         if res[i] ~= ngx.null and type(res[i]) == "table" then
             for j = 1, #res[i] do
-                if type(res[i][j]) == "string" and string.sub(res[i][j], 1, 11) == "CLUSTERDOWN" then
+                if type(res[i][j]) == "string" and string_sub(res[i][j], 1, 11) == "CLUSTERDOWN" then
+                    ngx_log(NGX_INFO, res[i][j])
                     return true
                 end
             end
@@ -862,23 +1060,23 @@ function _M.commit_pipeline(self)
     -- coroutine swich happens(eg. ngx.sleep, cosocket), very important!
     slots = nil -- luacheck: ignore
 
-    local magicRandomPickupSeed = generate_magic_seed(self)
+    local magic_random_seed = generate_magic_seed(self)
 
     for k, v in pairs(node_req_map) do
         local reqs = v.reqs
 
-        local ip, port
+        local ip, port, slave
         local redis_client
-        local ok, err_t = nil, {}
+        local ok, errors = nil, {}
         -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
         local tries = redis7_with_host and 2 or 1
         for i = 1, tries do
-            local slave, err
-            ip, port, slave, err = pick_node(self, v.serv_list, magicRandomPickupSeed, i)
+            local err
+            ip, port, slave, err = pick_node(self, v.serv_list, nil, magic_random_seed, i)
             if err then
-                table_insert(err_t, err)
+                table_insert(errors, err)
                 self:refresh_slots()
-                return nil, table_concat(err_t, ",")
+                return nil, table_concat(errors, ",")
             end
 
             redis_client = redis:new()
@@ -886,24 +1084,21 @@ function _M.commit_pipeline(self)
                                       config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                       config.read_timeout or DEFAULT_READ_TIMEOUT)
             ok, err = redis_client:connect(ip, port, self.config.connect_opts)
-            if ok then
-                v.slave = slave
-                break
-            end
-            table_insert(err_t, err)
+            if ok then break end
+            table_insert(errors, ip .. ":" .. port .. " " .. err)
         end
         if not ok then
             self:refresh_slots()
-            return nil, "failed to connect, err: " .. table_concat(err_t, ",")
+            return nil, "failed to connect, err: " .. table_concat(errors, ",")
         end
 
-        local _, autherr = check_auth(self, redis_client)
-        if autherr then
+        local _, auth_err = check_auth(self, redis_client)
+        if auth_err then
             redis_client:close()
-            return nil, autherr
+            return nil, auth_err
         end
 
-        if v.slave then
+        if slave then
             --set readonly
             local ok, err = redis_client:readonly()
             if not ok then

@@ -1,5 +1,5 @@
 =begin comment
-REDIS_AUTH=no PATH="/usr/local/openresty/nginx/sbin:$PATH" prove t/z-recover.t
+REDIS_AUTH=no PATH="/usr/local/openresty/nginx/sbin:$PATH" prove -v t/z-recover.t
 =end comment
 =cut
 
@@ -185,16 +185,16 @@ apple: small
 banana: long
 watermelon: large
 down: true
-failed to get hm fruits: failed to connect, err: timeout
+failed to get hm fruits: failed to connect, err: [1-9][0-9.:]+ timeout
 retry up: true
 hmset fruits: OK
 apple: small
 banana: long
 watermelon: large
 retry down: true
-failed to get hm fruits: failed to connect, err: timeout,no resolver defined to resolve\040"redis-\d"
+failed to get hm fruits: failed to connect, err: [1-9][0-9.:]+ timeout,[[:alnum:].:-]+ no resolver defined to resolve\040"redis-\d"
 restore up: true$
 --- error_log eval
-["tcp socket connect timed out", qq/unable to connect, attempt nr/]
+["tcp socket connect timed out", qr/unable to connect ip:port [[:alnum:].:-]+, attempt \d, error: timeout/]
 --- wait: 1
 --- timeout: 240s
