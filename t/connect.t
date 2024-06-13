@@ -81,7 +81,7 @@ __DATA__
 --- request
 GET /t
 --- response_body eval
-qr/failed to connect, err: too many waiting connect operations/
+qr/failed to connect, err: [1-9][0-9.:]+ too many waiting connect operations/
 --- no_error_log
 [error]
 
@@ -150,7 +150,7 @@ qr/failed to connect, err: too many waiting connect operations/
 --- request
 GET /t
 --- response_body eval
-[qr/failed to connect, err: timeout/, qr/\d res = OK/]
+[qr/failed to connect, err: [1-9][0-9.:]+ timeout/, qr/\d res = OK/]
 --- error_log eval
 qr/lua tcp socket queued connect timed out/
 --- timeout: 10s
