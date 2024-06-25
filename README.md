@@ -352,6 +352,9 @@ end
 5. Limitation only for turn on enable slave read: If slave -> master link is down(maybe still under sync and recovery), resty-redis-cluster will not filter these nodes out. Thus, read from slave may return unexpected response. Suggest always catch the response parsing exception while enable slave read. 
    This is because client depends on cluster slots command.
    
+### Compatibilty
+
+Currently, this library is fully tested with Redis `6.x` and `7.x`.
    
 ## Copyright and License
 

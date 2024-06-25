@@ -106,5 +106,5 @@ qr/fetching slots from: 24 servers/,
 qr/fetching slots from: 30 servers/,
 qr/fetching slots from: 36 servers/]
 --- response_body
-failed to get foo: mock redis connect error
+failed to get foo: tried 5 times: mock redis connect error
 --- wait: 1
