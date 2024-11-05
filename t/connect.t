@@ -82,8 +82,8 @@ __DATA__
 GET /t
 --- response_body eval
 qr/failed to connect, err: [1-9][0-9.:]+ too many waiting connect operations/
---- no_error_log
-[error]
+--- error_log
+failed to acquire the lock in refreshing slot cache: timeout
 
 
 

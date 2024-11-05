@@ -8,12 +8,12 @@ This fork of [steve0511/resty-redis-cluster](https://github.com/steve0511/resty-
 ### Why we build this client?
 Openresty has no official client which can support redis cluster. (We could see discussion at https://github.com/openresty/lua-resty-redis/issues/43). Also, looking around other 3rd party openresty redis cluster client , we do't find one can completely support redis cluster features as our project requirement.
 
-Resty-redis-cluster is a new build openresty module which can currently support most of redis-cluster features. 
+Resty-redis-cluster is a new build openresty module which can currently support most of redis-cluster features.
 
-While building the client, thanks for https://github.com/cuiweixie/lua-resty-redis-cluster which gave us some good reference. 
+While building the client, thanks for https://github.com/cuiweixie/lua-resty-redis-cluster which gave us some good reference.
 
 ### feature list
-1. resty-redis-cluster will cache slot->redis node mapping relationship, and support to calculate slot of key by CRC16, then access data by the cached mapping. The way we calculate CRC16 and caching is somewhat similar with https://github.com/cuiweixie/lua-resty-redis-cluster. 
+1. resty-redis-cluster will cache slot->redis node mapping relationship, and support to calculate slot of key by CRC16, then access data by the cached mapping. The way we calculate CRC16 and caching is somewhat similar with https://github.com/cuiweixie/lua-resty-redis-cluster.
 
 2. Support usual redis cluster access and most command
 
@@ -27,13 +27,13 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 
 7. Support error handling for the different failure scenario of redis cluster. (etc.Singel slave, master fail, cluster down)
 
-8. fix some critical issues of https://github.com/cuiweixie/lua-resty-redis-cluster. 
+8. fix some critical issues of https://github.com/cuiweixie/lua-resty-redis-cluster.
    1) memory leak issues while there is high throughput. Socket request will cause the suspend and swith of coroutine, so there would be multiple requests still have reference to the big slot mapping cache. This will cause LUAJIT VM crashed.
-   
-   2) we must refresh slot cache mapping in case any redis nodes connection failure, otherwise we will not get the latest slot cache mapping and always get failure. Refer to Jedis, same behaviour to referesh cache mapping while any unknown connection issue. 
-   
+
+   2) we must refresh slot cache mapping in case any redis nodes connection failure, otherwise we will not get the latest slot cache mapping and always get failure. Refer to Jedis, same behaviour to referesh cache mapping while any unknown connection issue.
+
    3) We must handle ASK redirection in usual/MOVED commands
-   
+
    4) Pipeline must also handle MOVED signal with refreshing slot cache mapping and retry.
 
 9.  Support authentication.
@@ -48,7 +48,7 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 ### installation
 
 1. please add xmodem.lua and rediscluster.lua at lualib, Also please add library:lua-resty-redis and lua-resty-lock
-   
+
    nginx.conf like:
 
    lua_package_path "/path/lualib/?.lua;";
@@ -56,17 +56,17 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 2. nginx.conf add config:
 
    lua_shared_dict redis_cluster_slot_locks 100k;
-   
-3. or install by luarock, link: https://luarocks.org/modules/steve0511/resty-redis-cluster 
+
+3. or install by luarock, link: https://luarocks.org/modules/steve0511/resty-redis-cluster
 
 ### Sample usage
 
-1. Use normal commands:
+1. Use normal commands
 
 ```lua
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",                   --rediscluster name
     serv_list = {                           --redis cluster node list(host and port),
         { ip = "127.0.0.1", port = 7001 },
@@ -78,7 +78,8 @@ local config = {
     },
     keepalive_timeout = 60000,              --redis connection pool idle timeout
     keepalive_cons = 1000,                  --redis connection pool size
-    connect_timeout = 1000,              --timeout while connecting
+    connect_timeout = 1000,                 --timeout while connecting
+    lock_timeout = 5,                       --timeout acquiring resty lock
     max_redirection = 5,                    --maximum retry attempts for redirection
     max_connection_attempts = 1             --maximum retry attempts for connection
 }
@@ -93,12 +94,13 @@ else
     ngx.say(v)
 end
 ```
-  authentication: 
-  
+
+2. Authentication
+
 ```lua
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",                   --rediscluster name
     serv_list = {                           --redis cluster node list(host and port),
         { ip = "127.0.0.1", port = 7001 },
@@ -110,9 +112,10 @@ local config = {
     },
     keepalive_timeout = 60000,              --redis connection pool idle timeout
     keepalive_cons = 1000,                  --redis connection pool size
-    connect_timeout = 1000,              --timeout while connecting
+    connect_timeout = 1000,                 --timeout while connecting
     read_timeout = 1000,                    --timeout while reading
     send_timeout = 1000,                    --timeout while sending
+    lock_timeout = 5,                       --timeout acquiring resty lock
     max_redirection = 5,                    --maximum retry attempts for redirection,
     max_connection_attempts = 1,            --maximum retry attempts for connection
     auth = "pass"                           --set password while setting auth
@@ -126,17 +129,17 @@ if err then
     ngx.log(ngx.ERR, "err: ", err)
 else
     ngx.say(v)
-end 
+end
 ```
 
-2. Use pipeline:
+3. Use pipeline
 
 ```lua
 local cjson = require "cjson"
 
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",
     serv_list = {
         { ip = "127.0.0.1", port = 7001 },
@@ -151,6 +154,7 @@ local config = {
     connect_timeout = 1000,
     read_timeout = 1000,
     send_timeout = 1000,
+    lock_timeout = 5,
     max_redirection = 5,
     max_connection_attempts = 1
 }
@@ -173,7 +177,7 @@ else
 end
 ```
 
-3. enable slave node read:
+4. Enable slave node read
 
    Note: Currently enable_slave_read is only limited in pure read scenario.
    We don't support mixed read and write scenario(distingush read, write operation) in single config set with enable_slave_read now.
@@ -185,8 +189,8 @@ end
 local cjson = require "cjson"
 
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",
     enable_slave_read = true,
     serv_list = {
@@ -202,6 +206,7 @@ local config = {
     connect_timeout = 1000,
     read_timeout = 1000,
     send_timeout = 1000,
+    lock_timeout = 5,
     max_redirection = 5,
     max_connection_attempts = 1
 }
@@ -217,13 +222,14 @@ else
 end
 ```
 
-4. hashtag
+5. Hashtag
+
 ```lua
 local cjson = require "cjson"
 
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",
     enable_slave_read = true,
     serv_list = {
@@ -239,6 +245,7 @@ local config = {
     connect_timeout = 1000,
     read_timeout = 1000,
     send_timeout = 1000,
+    lock_timeout = 5,
     max_redirection = 5,
     max_connection_attempts = 1
 }
@@ -261,12 +268,12 @@ else
 end
 ```
 
-5. eval
+6. eval
 
 ```lua
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",                   --rediscluster name
     serv_list = {                           --redis cluster node list(host and port),
         { ip = "127.0.0.1", port = 7001 },
@@ -278,9 +285,10 @@ local config = {
     },
     keepalive_timeout = 60000,              --redis connection pool idle timeout
     keepalive_cons = 1000,                  --redis connection pool size
-    connect_timeout = 1000,              --timeout while connecting
+    connect_timeout = 1000,                 --timeout while connecting
     read_timeout = 1000,                    --timeout while reading
     send_timeout = 1000,                    --timeout while sending
+    lock_timeout = 5,                       --timeout acquiring resty lock
     max_redirection = 5,                    --maximum retry attempts for redirection
     max_connection_attempts = 1             --maximum retry attempts for connection
 }
@@ -295,15 +303,16 @@ else
     ngx.say(v)
 end
 ```
-6. Use SSL :
 
-  Note: `connect_opts` is optional config field that can be set and will be passed to underlying redis connect call.
-  More information about these options can be found in [lua-resty-redis](https://github.com/openresty/lua-resty-redis#connect) documentation.
+7. Use SSL
+
+   Note: `connect_opts` is optional config field that can be set and will be passed to underlying redis connect call.
+   More information about these options can be found in [lua-resty-redis](https://github.com/openresty/lua-resty-redis#connect) documentation.
 
 ```lua
 local config = {
-    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used 
-    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used 
+    dict_name = "test_locks",               --shared dictionary name for locks, if default value is not used
+    refresh_lock_key = "refresh_lock",      --shared dictionary name prefix for lock of each worker, if default value is not used
     name = "testCluster",                   --rediscluster name
     serv_list = {                           --redis cluster node list(host and port),
         { ip = "127.0.0.1", port = 7001 },
@@ -315,9 +324,10 @@ local config = {
     },
     keepalive_timeout = 60000,              --redis connection pool idle timeout
     keepalive_cons = 1000,                  --redis connection pool size
-    connect_timeout = 1000,              --timeout while connecting
+    connect_timeout = 1000,                 --timeout while connecting
+    lock_timeout = 5,                       --timeout acquiring resty lock
     max_redirection = 5,                    --maximum retry attempts for redirection
-    max_connection_attempts = 1,             --maximum retry attempts for connection
+    max_connection_attempts = 1,            --maximum retry attempts for connection
     connect_opts = {
         ssl = true,
         ssl_verify = true,
@@ -349,13 +359,29 @@ end
 
 4. Limitation only for turn on enable slave read: If we need to discover new slave node(but without adding new master), must retrigger new slot mapping cache refresh, otherwise slot mapping still record the last version of node tables.(easiest way is rebooting nginx nodes)
 
-5. Limitation only for turn on enable slave read: If slave -> master link is down(maybe still under sync and recovery), resty-redis-cluster will not filter these nodes out. Thus, read from slave may return unexpected response. Suggest always catch the response parsing exception while enable slave read. 
+5. Limitation only for turn on enable slave read: If slave -> master link is down(maybe still under sync and recovery), resty-redis-cluster will not filter these nodes out. Thus, read from slave may return unexpected response. Suggest always catch the response parsing exception while enable slave read.
    This is because client depends on cluster slots command.
-   
+
 ### Compatibilty
 
 Currently, this library is fully tested with Redis `6.x` and `7.x`.
-   
+
+### Changelog
+
+#### Unreleased
+
+1. Currently, the timeout for acquiring a lock is fixed to `5s`.
+   We add a new option `lock_timeout` to make it configurable.
+2. The lock timeout parameter was incorrectly set to `time_out = 0`.
+   We fix it to `timeout = 0`. This would improve perf as there is no
+   need for everyone to refresh the slots.
+
+   This is a breaking change when there is network issues and the clients
+   tries to refresh the slot info. Before the fix, all clients will refresh
+   once, and after the fix only one client is fixing it.
+3. Return detailed error message to downstream component (e.g. Kong Gateway)
+   for better debuggability.
+
 ## Copyright and License
 
 This module is licensed under the Apache License Version 2.0 .

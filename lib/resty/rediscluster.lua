@@ -523,7 +523,7 @@ end
 
 function _M.refresh_slots(self)
     local lock, err, elapsed
-    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { time_out = 0 })
+    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { timeout = 0 })
     if not lock then
         ngx_log(NGX_ERR, "failed to create lock in refreshing slot cache: ", err)
         return nil, err
@@ -551,17 +551,19 @@ function _M.init_slots(self)
         return true
     end
 
-    local lock, elapsed, err
-    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME)
+    local lock, elapsed, err, err_msg
+    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { timeout = self.config.lock_timeout })
     if not lock then
-        ngx_log(NGX_ERR, "failed to create lock in initializing slot cache: ", err)
-        return nil, err
+        err_msg = "failed to create lock in initializing slot cache: " .. tostring(err)
+        ngx_log(NGX_ERR, err_msg)
+        return nil, err_msg
     end
 
     elapsed, err = lock:lock("redis_cluster_slot_" .. self.config.name)
     if not elapsed then
-        ngx_log(NGX_ERR, "failed to acquire the lock in initializing slot cache: ", err)
-        return nil, err
+        err_msg = "failed to acquire the lock in initializing slot cache: " .. tostring(err)
+        ngx_log(NGX_ERR, err_msg)
+        return nil, err_msg
     end
 
     if slot_cache[self.config.name] then
