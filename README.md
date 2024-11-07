@@ -370,6 +370,10 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 #### Unreleased
 
+1. TBD
+
+#### 1.5.5
+
 1. Currently, the timeout for acquiring a lock is fixed to `5s`.
    We add a new option `lock_timeout` to make it configurable.
 2. The lock timeout parameter was incorrectly set to `time_out = 0`.
