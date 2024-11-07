@@ -378,7 +378,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
    This is a breaking change when there is network issues and the clients
    tries to refresh the slot info. Before the fix, all clients will refresh
-   once, and after the fix only one client is fixing it.
+   once, and after the fix only one client is refreshing it.
 3. Return detailed error message to downstream component (e.g. Kong Gateway)
    for better debuggability.
 
