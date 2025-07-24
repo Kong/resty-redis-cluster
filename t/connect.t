@@ -155,3 +155,49 @@ GET /t
 qr/lua tcp socket queued connect timed out/
 --- timeout: 10s
 --- wait: 1
+
+
+
+=== TEST 3: pool name is correctly set
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+
+            local config = {
+                            name = "testCluster",                   --rediscluster name
+                            serv_list = {                           --redis cluster node list(host and port),
+                                            { ip = "127.0.0.1", port = 6371 },
+                                        },
+                            connect_opts = {
+                                                backlog = 1,
+                                                pool_size = 1,
+                                            },
+                            username = "default",
+                            password = "kong",
+
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+
+            if err then
+                ngx.say("failed to create: ", err)
+                return
+            end
+
+            local res, err = red:set("dog", "an animal")
+            if not res then
+                ngx.say("failed to set dog: ", err)
+                return
+            end
+
+            ngx.say("set dog: ", res)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+set dog: OK
+--- error_log
+set pool name: 127.0.0.1:6371:nil:nil::default:28877ae869af57c757d1eb26e7cd1784f6aa6bd8dad8d996ee3665b87edcba22

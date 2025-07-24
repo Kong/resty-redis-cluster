@@ -2,6 +2,8 @@ local redis = require "resty.redis"
 local resty_lock = require "resty.lock"
 local xmodem = require "resty.xmodem"
 local new_tab = require "table.new"
+local digest = require "resty.openssl.digest"
+local resty_string = require "resty.string"
 
 local setmetatable = setmetatable
 local tostring = tostring
@@ -63,6 +65,81 @@ local cluster_invalid_cmds = {
     ["config"] = true,
     ["shutdown"] = true
 }
+
+
+local CACHED_SHA256
+
+
+local function hash_password(password)
+  if not password or password == "" then
+    return ""
+  end
+
+  local sha256, err
+  if CACHED_SHA256 then
+    sha256 = CACHED_SHA256
+
+  else
+    sha256, err = digest.new("sha256")
+    if not sha256 then
+      return nil, err
+    end
+    CACHED_SHA256 = sha256
+  end
+
+  local hash
+  hash, err = sha256:final(password)
+  if not hash then
+    CACHED_SHA256 = nil
+    return nil, err
+  end
+
+  local ok
+  ok, err = sha256:reset()
+  if not ok then
+    CACHED_SHA256 = nil
+    return nil, err
+  end
+
+  return resty_string.to_hex(hash)
+end
+
+
+local function set_base_pool_name(conf)
+  if not conf.connect_opts then
+    conf.connect_opts = {}
+  end
+
+  local opts = conf.connect_opts
+  local base_pool
+  if type(opts.pool) == "string" then
+    base_pool = opts.pool
+
+  else
+    local hashed_password, err = hash_password(conf.password)
+    if not hashed_password then
+      ngx_log(NGX_ERR, "failed to hash the password: ", err)
+      return nil, err
+    end
+
+    base_pool = tostring(opts.ssl)
+                .. ":" .. tostring(opts.ssl_verify)
+                .. ":" .. (opts.server_name or "")
+                .. ":" .. (conf.username or "")
+                .. ":" .. (hashed_password or "")
+
+  end
+  conf.base_pool = base_pool
+
+  return true
+end
+
+
+local function set_poolname(ip, port, config)
+  local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
+  config.connect_opts.pool = pool
+  ngx_log(NGX_DEBUG, "set pool name: ", pool)
+end
 
 
 -- According to the Redis documentation, the hash tag is found only if the '{' and '}'
@@ -398,6 +475,7 @@ local function try_hosts_slots(self, serv_list)
         -- Kong currently does not configure 'max_connection_attempts'
         for k = 1, config.max_connection_attempts or DEFAULT_MAX_CONNECTION_ATTEMPTS do
             -- for each ip:port pair, we try at least once before check total timeout
+            set_poolname(ip, port, self.config)
             ok, err = redis_client:connect(ip, port, self.config.connect_opts)
             if ok then break end
             ngx_log(NGX_ERR, "unable to connect ip:port " .. ip .. ":" .. port .. ", attempt ", k, ", error: ", err)
@@ -602,10 +680,17 @@ function _M.new(_, config)
 
     local inst = { config = config }
     inst = setmetatable(inst, mt)
+
+    local ok, err = set_base_pool_name(inst.config)
+    if not ok then
+      return nil, err
+    end
+
     local _, err = inst:init_slots()
     if err then
         return nil, err
     end
+
     return inst
 end
 
@@ -789,6 +874,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             -- asking redirection should only happens at master nodes
             ip, port, slave = target_ip, target_port, false
 
+            set_poolname(ip, port, self.config)
             ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
             if ok then break end
         else
@@ -802,6 +888,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     return nil, err
                 end
 
+                set_poolname(ip, port, self.config)
                 ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
                 if ok then break end
             end
@@ -914,6 +1001,7 @@ local function _do_cmd_master(self, cmd, key, ...)
         redis_client:set_timeouts(self.config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   self.config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   self.config.read_timeout or DEFAULT_READ_TIMEOUT)
+        set_poolname(master.ip, master.port, self.config)
         local ok, err = redis_client:connect(master.ip, master.port, self.config.connect_opts)
         if ok then
             local _, auth_err = check_auth(self, redis_client)
@@ -1085,6 +1173,7 @@ function _M.commit_pipeline(self)
             redis_client:set_timeouts(config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                       config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                       config.read_timeout or DEFAULT_READ_TIMEOUT)
+            set_poolname(ip, port, self.config)
             ok, err = redis_client:connect(ip, port, self.config.connect_opts)
             if ok then break end
             table_insert(errors, ip .. ":" .. port .. " " .. err)

@@ -370,7 +370,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 #### Unreleased
 
-1. TBD
+1. Set pool name before connect so that connetions won't be reused incorrectly.
 
 #### 1.5.5
 
