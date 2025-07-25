@@ -18,6 +18,7 @@ description = {
 
 dependencies = {
   "lua >= 5.1",
+  "lua-resty-openssl >= 0.6.3",
 }
 
 build = {
