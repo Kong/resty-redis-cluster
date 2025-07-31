@@ -42,7 +42,7 @@ jobs:
           - name: Install lua-resty-openssl
             run: |
               sudo /usr/local/openresty/bin/opm get fffonion/lua-resty-openssl
-              /usr/local/openresty/bin/opm info fffonion/lua-resty-openssl
+              sudo /usr/local/openresty/bin/opm info fffonion/lua-resty-openssl
 
           - name: Set up Redis Cluster
             run: |

@@ -136,6 +136,7 @@ end
 
 
 local function set_poolname(ip, port, config)
+  -- concat the ip and port of the node to the base pool name
   local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
   config.connect_opts.pool = pool
   ngx_log(NGX_DEBUG, "set pool name: ", pool)
