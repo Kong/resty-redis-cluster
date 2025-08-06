@@ -64,6 +64,7 @@ __DATA__
 
                     red:init_pipeline()
                     red:hgetall("animals")
+                    ngx.sleep(0.5)
 
                     local res, err = red:commit_pipeline()
                     if err then
@@ -84,6 +85,7 @@ GET /t
 qr/failed to connect, err: [1-9][0-9.:]+ too many waiting connect operations/
 --- error_log
 failed to acquire the lock in refreshing slot cache: timeout
+--- timeout: 5s
 
 
 
@@ -126,6 +128,7 @@ failed to acquire the lock in refreshing slot cache: timeout
 
                     red:init_pipeline()
                     red:hmset("animals", { dog = "bark", cat = "meow", cow = "moo" })
+                    ngx.sleep(0.5)
 
                     local res, err = red:commit_pipeline()
                     return res, err
@@ -206,4 +209,4 @@ GET /t
 set dog: OK
 --- log_level: debug
 --- error_log eval
-qr/set pool name: 127.0.0.1:637[1-6]:nil:nil::default:28877ae869af57c757d1eb26e7cd1784f6aa6bd8dad8d996ee3665b87edcba22/
+qr/set pool name: (127.0.0.1|172.20.0.3[1-6]):637[1-6]:nil:nil::default:28877ae869af57c757d1eb26e7cd1784f6aa6bd8dad8d996ee3665b87edcba22/
