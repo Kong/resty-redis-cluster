@@ -39,6 +39,11 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y openresty
 
+          - name: Install lua-resty-openssl
+            run: |
+              sudo /usr/local/openresty/bin/opm get fffonion/lua-resty-openssl
+              sudo /usr/local/openresty/bin/opm info fffonion/lua-resty-openssl
+
           - name: Set up Redis Cluster
             run: |
               docker compose -f t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml up -d

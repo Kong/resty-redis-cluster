@@ -25,7 +25,7 @@ our $HttpConfig = qq{
         local origin_redis_connect_fn = redis.connect
         redis.connect = function(...)
             local args = {...}
-            if not args[4] then
+            if args[4] and args[4].connect_error then
                 return nil, "mock redis connect error"
             end
 
@@ -88,7 +88,7 @@ __DATA__
             end
 
             -- mock redis connect error
-            red.config.connect_opts = nil
+            red.config.connect_opts.connect_error = true
 
             local res, err = red:get("foo")
             if not res then
