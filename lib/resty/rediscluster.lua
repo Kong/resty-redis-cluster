@@ -200,24 +200,28 @@ do
 
         -- redis < 6.0
         if type(self.config.auth) == "string" then
-            local ok, err = check_reused(redis_client)
-            if err then
-                return nil, err
-            end
-            if ok then
-                return true, nil
+            if self.config.force_auth ~= true then
+                local ok, err = check_reused(redis_client)
+                if err then
+                    return nil, err
+                end
+                if ok then
+                    return true, nil
+                end
             end
 
             return redis_client:auth(self.config.auth)
 
         -- redis 6.x adds support for username+password combination
         elseif type(self.config.password) == "string" then
-            local ok, err = check_reused(redis_client)
-            if err then
-                return nil, err
-            end
-            if ok then
-                return true, nil
+            if self.config.force_auth ~= true then
+                local ok, err = check_reused(redis_client)
+                if err then
+                    return nil, err
+                end
+                if ok then
+                    return true, nil
+                end
             end
 
             if type(self.config.username) == "string" then
