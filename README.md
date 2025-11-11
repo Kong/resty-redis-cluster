@@ -372,6 +372,10 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 1. TBD
 
+#### 1.5.7
+
+1. Add `force_auth` flag to control whether to call `auth` after each `connect`.
+
 #### 1.5.6
 
 1. Set pool name before connect so that connetions won't be reused incorrectly.
