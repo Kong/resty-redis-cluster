@@ -561,15 +561,15 @@ function _M.fetch_slots(self)
     if serv_list_cached then
         serv_list_combined = {}
 
-        for i, s in ipairs(serv_list_cached.serv_list) do
-            table_insert(serv_list_combined, i, s)
-        end
-
         -- prioritize serv_list from config over cached serv_list
         -- in the event that the entire config serv_list no longer
         -- points to anything usable, try the cached serv_list
-        for i, s in ipairs(serv_list) do
-            table_insert(serv_list_combined, i, s)
+        for _, s in ipairs(serv_list) do
+            serv_list_combined[#serv_list_combined + 1] = s
+        end
+
+        for _, s in ipairs(serv_list_cached.serv_list) do
+            serv_list_combined[#serv_list_combined + 1] = s
         end
 
     else
