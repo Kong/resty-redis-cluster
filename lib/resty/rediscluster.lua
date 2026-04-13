@@ -360,7 +360,9 @@ local function parse_slots(self, redis_client)
     end
 
     -- mapping from slots to IPs and/or hostnames of servers
-    local slots = new_tab(0, REDIS_SLOTS_TOTAL)
+    -- Slot indices are integers 0-16383. Indices 1-16383 go into the array
+    -- part for O(1) access; index 0 falls into the hash part (1 entry).
+    local slots = new_tab(REDIS_SLOTS_TOTAL, 1)
 
     -- must be a fresh table
     local master_list = {}
