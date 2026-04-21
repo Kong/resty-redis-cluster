@@ -608,7 +608,7 @@ end
 
 function _M.refresh_slots(self)
     local lock, err, elapsed
-    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { timeout = 0 })
+    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { timeout = 5 })
     if not lock then
         ngx_log(NGX_ERR, "failed to create lock in refreshing slot cache: ", err)
         return nil, err
