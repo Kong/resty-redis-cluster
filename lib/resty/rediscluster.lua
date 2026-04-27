@@ -360,7 +360,9 @@ local function parse_slots(self, redis_client)
     end
 
     -- mapping from slots to IPs and/or hostnames of servers
-    local slots = new_tab(0, REDIS_SLOTS_TOTAL)
+    -- Slot indices are integers 0-16383. Indices 1-16383 go into the array
+    -- part for O(1) access; index 0 falls into the hash part (1 entry).
+    local slots = new_tab(REDIS_SLOTS_TOTAL, 1)
 
     -- must be a fresh table
     local master_list = {}
@@ -483,7 +485,7 @@ local function try_hosts_slots(self, serv_list)
             set_poolname(ip, port, self.config)
             ok, err = redis_client:connect(ip, port, self.config.connect_opts)
             if ok then break end
-            ngx_log(NGX_ERR, "unable to connect ip:port " .. ip .. ":" .. port .. ", attempt ", k, ", error: ", err)
+            ngx_log(NGX_ERR, "unable to connect ip:port ", ip, ":", port, ", attempt ", k, ", error: ", err)
             table_insert(errors, err)
 
             -- Kong currently does not configure 'max_connection_timeout'
@@ -561,15 +563,15 @@ function _M.fetch_slots(self)
     if serv_list_cached then
         serv_list_combined = {}
 
-        for i, s in ipairs(serv_list_cached.serv_list) do
-            table_insert(serv_list_combined, i, s)
-        end
-
         -- prioritize serv_list from config over cached serv_list
         -- in the event that the entire config serv_list no longer
         -- points to anything usable, try the cached serv_list
-        for i, s in ipairs(serv_list) do
-            table_insert(serv_list_combined, i, s)
+        for _, s in ipairs(serv_list) do
+            serv_list_combined[#serv_list_combined + 1] = s
+        end
+
+        for _, s in ipairs(serv_list_cached.serv_list) do
+            serv_list_combined[#serv_list_combined + 1] = s
         end
 
     else
@@ -606,7 +608,7 @@ end
 
 function _M.refresh_slots(self)
     local lock, err, elapsed
-    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { timeout = 0 })
+    lock, err = resty_lock:new(self.config.dict_name or DEFAULT_SHARED_DICT_NAME, { timeout = 5 })
     if not lock then
         ngx_log(NGX_ERR, "failed to create lock in refreshing slot cache: ", err)
         return nil, err
@@ -708,7 +710,7 @@ local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index
 
     if not serv_list or #serv_list < 1 then
         if slot then
-            ngx_log(NGX_DEBUG, "pick node for slot " .. tostring(slot))
+            ngx_log(NGX_DEBUG, "pick node for slot ", slot)
         end
         return nil, nil, nil, "serv_list is empty"
     end
@@ -781,7 +783,7 @@ local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index
     host = serv_list[index].ip
     port = serv_list[index].port
 
-    ngx_log(NGX_INFO, "index: " .. index .. ", pick node: ", host, ":", tostring(port))
+    ngx_log(NGX_INFO, "index: ", index, ", pick node: ", host, ":", port)
 
     return host, port, slave
 end
@@ -853,7 +855,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
 
     for k = 1, loop_counter do
         if k > 1 then
-            ngx_log(NGX_NOTICE, "handle retry attempts:" .. k .. " for cmd:" .. cmd .. " key:" .. tostring(key))
+            ngx_log(NGX_NOTICE, "handle retry attempts:", k, " for cmd:", cmd, " key:", key)
         end
 
         local slots = slot_cache[self.config.name]
@@ -888,7 +890,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             for i = 1, tries do
                 ip, port, slave, err = pick_node(self, serv_list, slot, magic_random_seed, i)
                 if err then
-                    ngx_log(NGX_ERR, "pickup node failed, will return failed for this request, meanwhile refereshing slotcache " .. err)
+                    ngx_log(NGX_ERR, "pickup node failed, will return failed for this request, meanwhile refreshing slotcache ", err)
                     self:refresh_slots()
                     return nil, err
                 end
@@ -936,12 +938,12 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             if err then
                 -- todo: we can follow the moved target instead of refreshing the slots
                 if has_moved_signal(res) then
-                    ngx_log(NGX_DEBUG, "find MOVED signal, trigger retry for normal commands, cmd:" .. cmd .. " key:" .. tostring(key))
+                    ngx_log(NGX_DEBUG, "find MOVED signal, trigger retry for normal commands, cmd:", cmd, " key:", key)
                     -- if retry with moved, we will not asking to specific ip:port anymore
                     target_ip = nil
                     target_port = nil
                     local _, _, moved_ip, moved_port = string_find(err, "MOVED %d+ ([%w%.%-_]+):(%d+)")
-                    if moved_ip == tostring(ip) and moved_port == tostring(port) then
+                    if moved_ip == ip and moved_port == tostring(port) then
                         ngx_log(NGX_DEBUG, "nested moved redirection detected, refreshing slots ...")
                     end
                     redis_client:close()
@@ -949,7 +951,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     need_to_retry = true
 
                 elseif string_sub(err, 1, 3) == "ASK" then
-                    ngx_log(NGX_DEBUG, "handle asking for normal commands, cmd:" .. cmd .. " key:" .. tostring(key))
+                    ngx_log(NGX_DEBUG, "handle asking for normal commands, cmd:", cmd, " key:", key)
                     if asking then
                         -- Should not happen after asking target ip:port and still return ask, if so, return error.
                         redis_client:close()
@@ -1062,7 +1064,7 @@ local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
             --deal with redis cluster ask redirection
             local ask_host, ask_port = parse_ask_signal(res[i])
             if ask_host ~= nil and ask_port ~= nil then
-                ngx_log(NGX_DEBUG, "handle ask signal for cmd:" .. reqs[i]["cmd"] .. " key:" .. reqs[i]["key"] .. " target host:" .. ask_host .. " target port:" .. ask_port)
+                ngx_log(NGX_DEBUG, "handle ask signal for cmd:", reqs[i]["cmd"], " key:", reqs[i]["key"], " target host:", ask_host, " target port:", ask_port)
                 local askres, err = handle_command_with_retry(self, ask_host, ask_port, true, reqs[i]["cmd"], reqs[i]["key"], unpack(reqs[i]["args"]))
                 if err then
                     return nil, err
@@ -1070,7 +1072,7 @@ local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
                     finalret[reqs[i].origin_index] = askres
                 end
             elseif has_moved_signal(res[i]) then
-                ngx_log(NGX_DEBUG, "handle moved signal for cmd:" .. reqs[i]["cmd"] .. " key:" .. reqs[i]["key"])
+                ngx_log(NGX_DEBUG, "handle moved signal for cmd:", reqs[i]["cmd"], " key:", reqs[i]["key"])
                 if need_to_fetch_slots then
                     -- if there is multiple signal for moved, we just need to fetch slot cache once, and do retry.
                     self:refresh_slots()
