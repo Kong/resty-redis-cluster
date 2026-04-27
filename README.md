@@ -372,6 +372,11 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 1. TBD
 
+#### 1.6.0
+
+1. Performance optimization on the slots data structure and logging
+2. Fixed a (breaking change) issue that the refresh_slot's lock timeout was implicitly changed to 0 in 1.5.5.
+
 #### 1.5.7
 
 1. Add `force_auth` flag to control whether to call `auth` after each `connect`.
