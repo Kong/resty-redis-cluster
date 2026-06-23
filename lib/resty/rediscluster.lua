@@ -266,6 +266,23 @@ local function check_status(self, redis_client)
 end
 
 
+-- retrieve only the major.minor from a redis INFO server payload; the patch
+-- component is optional since some managed Redis services report versions as
+-- x.y rather than x.y.z (FTI-7672: AWS ElastiCache Serverless Valkey reports x.y)
+local function parse_redis_version(server_info)
+    local version, err = re_match(server_info, [[redis_version:(\d+\.\d+)(?:\.\d+)?.*?\r\n]], "jo")
+    if err then
+        return nil, "PCRE regular expression error: " .. err
+    end
+    if not version then
+        return nil, "failed to match version info"
+    end
+    return version[1]
+end
+-- export for testing
+_M.parse_redis_version = parse_redis_version
+
+
 local function check_version(self, redis_client)
     if not redis_client then
         return nil, "redis_client can not be nil"
@@ -276,21 +293,15 @@ local function check_version(self, redis_client)
         return nil, "failed to fetch server info: " .. err
     end
 
-    -- retrieve only the major.minor
     local version
-    version, err = re_match(server_info, [[redis_version:(\d+\.\d+)\.\d+.*?\r\n]], "jo")
-    if err then
-        return nil, "PCRE regular expression error: " .. err
-    end
+    version, err = parse_redis_version(server_info)
     if not version then
-        return nil, "failed to match version info"
+        return nil, err
     end
 
-    ngx_log(NGX_INFO, "redis version: ", version[1])
-    if tonumber(version[1]) >= 8.0 then
-        -- Redis 8.0 is not yet released
-        -- print a debug message just in case slot format is changed
-        ngx_log(NGX_WARN, "redis version 8.x detected, comptability not guaranteed")
+    ngx_log(NGX_INFO, "redis version: ", version)
+    if tonumber(version) >= 9.0 then
+        ngx_log(NGX_WARN, "redis version 9.x or above detected, comptability not guaranteed")
     end
 
     return true, nil
