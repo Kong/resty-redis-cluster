@@ -372,6 +372,10 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 1. TBD
 
+#### 1.6.1
+
+1. Support Redis/Valkey versions reported as `x.y` (without a patch component), e.g. AWS ElastiCache Serverless Valkey, and accept Redis 8.x (warn only on `>= 9.0`).
+
 #### 1.6.0
 
 1. Performance optimization on the slots data structure and logging
