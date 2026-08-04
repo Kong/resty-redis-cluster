@@ -416,6 +416,8 @@ local function parse_slots(self, redis_client)
             local ip_tab = server_info[4]
             if ip_tab and type(ip_tab) == "table" and next(ip_tab) then
                 server_ip = ip_tab[2]
+                -- Elastic Cache-PATCH: empty metadata value (ElastiCache with default configuration returns {"hostname", ""})
+                if server_ip == "" then server_ip = nil end
             end
             if server_ip and server_ip ~= server_hostname_or_ip then
                 redis7_with_host = true
