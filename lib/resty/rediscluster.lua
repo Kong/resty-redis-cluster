@@ -105,12 +105,17 @@ local function hash_password(password)
 end
 
 
-local function set_base_pool_name(conf)
-  if not conf.connect_opts then
-    conf.connect_opts = {}
+-- Copy `connect_opts` into the instance, so that `set_poolname()` does not
+-- modify the caller's config.
+local function set_base_pool_name(inst)
+  local conf = inst.config
+  local opts = {}
+  if conf.connect_opts then
+    for k, v in pairs(conf.connect_opts) do
+      opts[k] = v
+    end
   end
 
-  local opts = conf.connect_opts
   local base_pool
   if type(opts.pool) == "string" then
     base_pool = opts.pool
@@ -129,16 +134,17 @@ local function set_base_pool_name(conf)
                 .. ":" .. (hashed_password or "")
 
   end
-  conf.base_pool = base_pool
+  inst.base_pool = base_pool
+  inst.connect_opts = opts
 
   return true
 end
 
 
-local function set_poolname(ip, port, config)
+local function set_poolname(ip, port, inst)
   -- concat the ip and port of the node to the base pool name
-  local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
-  config.connect_opts.pool = pool
+  local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. inst.base_pool
+  inst.connect_opts.pool = pool
   ngx_log(NGX_DEBUG, "set pool name: ", pool)
 end
 
@@ -493,8 +499,8 @@ local function try_hosts_slots(self, serv_list)
         -- Kong currently does not configure 'max_connection_attempts'
         for k = 1, config.max_connection_attempts or DEFAULT_MAX_CONNECTION_ATTEMPTS do
             -- for each ip:port pair, we try at least once before check total timeout
-            set_poolname(ip, port, self.config)
-            ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+            set_poolname(ip, port, self)
+            ok, err = redis_client:connect(ip, port, self.connect_opts)
             if ok then break end
             ngx_log(NGX_ERR, "unable to connect ip:port ", ip, ":", port, ", attempt ", k, ", error: ", err)
             table_insert(errors, err)
@@ -699,7 +705,7 @@ function _M.new(_, config)
     local inst = { config = config }
     inst = setmetatable(inst, mt)
 
-    local ok, err = set_base_pool_name(inst.config)
+    local ok, err = set_base_pool_name(inst)
     if not ok then
       return nil, err
     end
@@ -892,8 +898,8 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             -- asking redirection should only happens at master nodes
             ip, port, slave = target_ip, target_port, false
 
-            set_poolname(ip, port, self.config)
-            ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+            set_poolname(ip, port, self)
+            ok, connerr = redis_client:connect(ip, port, self.connect_opts)
             if ok then break end
         else
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
@@ -906,8 +912,8 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     return nil, err
                 end
 
-                set_poolname(ip, port, self.config)
-                ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+                set_poolname(ip, port, self)
+                ok, connerr = redis_client:connect(ip, port, self.connect_opts)
                 if ok then break end
             end
         end
@@ -1019,8 +1025,8 @@ local function _do_cmd_master(self, cmd, key, ...)
         redis_client:set_timeouts(self.config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   self.config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   self.config.read_timeout or DEFAULT_READ_TIMEOUT)
-        set_poolname(master.ip, master.port, self.config)
-        local ok, err = redis_client:connect(master.ip, master.port, self.config.connect_opts)
+        set_poolname(master.ip, master.port, self)
+        local ok, err = redis_client:connect(master.ip, master.port, self.connect_opts)
         if ok then
             local _, auth_err = check_auth(self, redis_client)
             if auth_err then
@@ -1191,8 +1197,8 @@ function _M.commit_pipeline(self)
             redis_client:set_timeouts(config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                       config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                       config.read_timeout or DEFAULT_READ_TIMEOUT)
-            set_poolname(ip, port, self.config)
-            ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+            set_poolname(ip, port, self)
+            ok, err = redis_client:connect(ip, port, self.connect_opts)
             if ok then break end
             table_insert(errors, ip .. ":" .. port .. " " .. err)
         end
