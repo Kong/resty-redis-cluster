@@ -370,7 +370,10 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 #### Unreleased
 
-1. TBD
+1. Fix `new()` modifying the caller's `config.connect_opts.pool`. When the same config table was
+   reused across `new()` calls, `ip:port:` was prepended to the pool name on every call, which caused:
+   - connections were never reused: every call got a new pool name and opened a new connection;
+   - memory growth: the pool name grew with the number of calls until the worker restarted.
 
 #### 1.6.1
 

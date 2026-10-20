@@ -88,7 +88,7 @@ __DATA__
             end
 
             -- mock redis connect error
-            red.config.connect_opts.connect_error = true
+            red.connect_opts.connect_error = true
 
             local res, err = red:get("foo")
             if not res then
