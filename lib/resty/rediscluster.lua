@@ -472,6 +472,29 @@ local function parse_slots(self, redis_client)
 end
 
 
+-- Repeat AUTH once when the caller can change the credentials: `config.on_auth_error(self, err)`
+-- returns `true` after it updated `self.config`. AUTH fails before the library sends a
+-- command to this node, so no command runs twice. An error in the function must not stop
+-- the request, so the library logs it and reports the original AUTH error.
+local function check_auth_retry(self, redis_client)
+    local ok, auth_err = check_auth(self, redis_client)
+    if auth_err then
+        local on_auth_error = self.config.on_auth_error
+        if on_auth_error then
+            local called, retry = pcall(on_auth_error, self, auth_err)
+            if not called then
+                ngx_log(NGX_ERR, "on_auth_error failed: ", retry)
+
+            elseif retry then
+                ok, auth_err = check_auth(self, redis_client)
+            end
+        end
+    end
+
+    return ok, auth_err
+end
+
+
 local function try_hosts_slots(self, serv_list)
     local start_time = ngx.now()
     local errors = {}
@@ -510,7 +533,7 @@ local function try_hosts_slots(self, serv_list)
         end
 
         if ok then
-            local _, auth_err = check_auth(self, redis_client)
+            local _, auth_err = check_auth_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
                 table_insert(errors, auth_err)
@@ -913,7 +936,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
         end
 
         if ok then
-            local _, auth_err = check_auth(self, redis_client)
+            local _, auth_err = check_auth_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
                 return nil, auth_err
@@ -1022,7 +1045,7 @@ local function _do_cmd_master(self, cmd, key, ...)
         set_poolname(master.ip, master.port, self.config)
         local ok, err = redis_client:connect(master.ip, master.port, self.config.connect_opts)
         if ok then
-            local _, auth_err = check_auth(self, redis_client)
+            local _, auth_err = check_auth_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
                 return nil, auth_err
@@ -1201,7 +1224,7 @@ function _M.commit_pipeline(self)
             return nil, "failed to connect, err: " .. table_concat(errors, ",")
         end
 
-        local _, auth_err = check_auth(self, redis_client)
+        local _, auth_err = check_auth_retry(self, redis_client)
         if auth_err then
             redis_client:close()
             return nil, auth_err

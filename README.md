@@ -132,6 +132,24 @@ else
 end
 ```
 
+`on_auth_error` is optional. The library calls it when an AUTH attempt fails. Return `true` after
+updating `config.auth`, `config.username` or `config.password`; the library then repeats AUTH once
+on the same connection. AUTH fails before the library sends a command, so no command runs twice.
+
+The hook runs for each failed AUTH attempt. Keep it fast, and throttle reads from the secret store.
+Do not put credentials in the error message of the hook; the library logs that message.
+
+```lua
+local config = {
+    -- ...
+    on_auth_error = function(self, err)
+        -- Read the current credentials from your store, then update the config.
+        self.config.password = read_password()
+        return true
+    end,
+}
+```
+
 3. Use pipeline
 
 ```lua
@@ -370,7 +388,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 #### Unreleased
 
-1. TBD
+1. Add the `on_auth_error` option. When Redis rejects AUTH, the library calls the option and repeats AUTH once on the same connection after the option updates the credentials.
 
 #### 1.6.1
 
