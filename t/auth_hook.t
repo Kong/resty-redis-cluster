@@ -46,7 +46,7 @@ __DATA__
                 -- AUTH runs on every use of a pooled connection, so both runs of this
                 -- block call the hook once, including the run with a warm slot cache.
                 force_auth = true,
-                on_auth_error = function(self, err)
+                auth_config_reconfigurer = function(self, err)
                     calls = calls + 1
                     self.config.auth = "kong"
                     return true
@@ -89,7 +89,7 @@ set: OK, hook calls: 1
                 auth = "kong",
                 -- AUTH runs on every use of a pooled connection, so a wrong password fails at once.
                 force_auth = true,
-                on_auth_error = function(self, err)
+                auth_config_reconfigurer = function(self, err)
                     self.config.auth = "kong"
                     return true
                 end,
@@ -136,7 +136,7 @@ get: an animal, set: OK
                 read_timeout = 1000,
                 send_timeout = 1000,
                 auth = "wrong-password",
-                on_auth_error = function() return false end,
+                auth_config_reconfigurer = function() return false end,
             }
 
             local redis = require "resty.rediscluster"
@@ -167,7 +167,7 @@ failed to fetch slots
                 read_timeout = 1000,
                 send_timeout = 1000,
                 auth = "wrong-password",
-                on_auth_error = function() error("the hook failed") end,
+                auth_config_reconfigurer = function() error("the hook failed") end,
             }
 
             local redis = require "resty.rediscluster"
@@ -180,7 +180,7 @@ GET /t
 --- response_body_like
 failed: .*WRONGPASS.*
 --- error_log
-on_auth_error failed
+auth_config_reconfigurer failed
 
 === TEST 5: the hook updates the username and the password
 --- http_config eval: $::HttpConfig
@@ -201,7 +201,7 @@ on_auth_error failed
                 username = "kong",
                 password = "wrong-password",
                 force_auth = true,
-                on_auth_error = function(self, err)
+                auth_config_reconfigurer = function(self, err)
                     calls = calls + 1
                     self.config.username = "kong"
                     self.config.password = "kong"
@@ -252,7 +252,7 @@ set: OK, hook calls: 1
 
             local calls = 0
             -- The hook cannot fix the password, so the retry must not loop.
-            config.on_auth_error = function(self, err)
+            config.auth_config_reconfigurer = function(self, err)
                 calls = calls + 1
                 return true
             end
@@ -288,7 +288,7 @@ get: nil, hook calls: 1
                 send_timeout = 1000,
                 auth = "kong",
                 force_auth = true,
-                on_auth_error = function(self, err)
+                auth_config_reconfigurer = function(self, err)
                     calls = calls + 1
                     self.config.auth = "kong"
                     return true
@@ -332,7 +332,7 @@ get: an animal, hook calls: 1
                 -- AUTH runs on every use of a pooled connection, so both runs of this
                 -- block call the hook once.
                 force_auth = true,
-                on_auth_error = function(self, err)
+                auth_config_reconfigurer = function(self, err)
                     calls = calls + 1
                     -- A hook that reads a secret store yields.
                     ngx.sleep(0.01)
