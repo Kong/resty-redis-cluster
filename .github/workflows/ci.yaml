@@ -25,7 +25,7 @@ jobs:
           - name: Install dependencies
             run: |
               sudo apt-get update
-              sudo apt install -y cpanminus build-essential libncurses5-dev libreadline-dev libssl-dev perl lua5.1 liblua5.1-0-dev
+              sudo apt install -y cpanminus build-essential libncurses5-dev libreadline-dev libssl-dev perl lua5.1 liblua5.1-0-dev luarocks
 
           - name: Install Test::Nginx
             run: |
@@ -41,8 +41,8 @@ jobs:
 
           - name: Install lua-resty-openssl
             run: |
-              sudo /usr/local/openresty/bin/opm get fffonion/lua-resty-openssl
-              sudo /usr/local/openresty/bin/opm info fffonion/lua-resty-openssl
+              sudo luarocks --lua-version 5.1 install lua-resty-openssl 1.8.0
+              /usr/local/openresty/bin/resty -e 'require("resty.openssl.digest")'
 
           - name: Set up Redis Cluster
             run: |

@@ -83,6 +83,7 @@ __DATA__
     }
 --- request
 GET /t
+--- timeout: 10s
 --- response_body
 1:failed to fetch slots: timeout;timeout;timeout
 2:failed to acquire the lock in initializing slot cache: timeout

@@ -132,6 +132,26 @@ else
 end
 ```
 
+`auth_config_reconfigurer` is optional. The library calls it when an AUTH attempt fails. When
+given, it **must** update `config.auth`, `config.username` or `config.password` and return `true`.
+The library then repeats AUTH once on the same connection. When it returns `false` or `nil`, the
+library reports the original AUTH error. AUTH fails before the library sends a command, so no
+command runs twice.
+
+The function runs for each failed AUTH attempt. Keep it fast, and throttle reads from the secret
+store. Do not put credentials in the error message; the library logs that message.
+
+```lua
+local config = {
+    -- ...
+    auth_config_reconfigurer = function(self, err)
+        -- Read the current credentials from your store, then update the config.
+        self.config.password = read_password()
+        return true
+    end,
+}
+```
+
 3. Use pipeline
 
 ```lua
@@ -370,7 +390,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 #### Unreleased
 
-1. TBD
+1. Add the `auth_config_reconfigurer` option. When Redis rejects AUTH, the library calls it and repeats AUTH once on the same connection after it updates the credentials.
 
 #### 1.6.1
 
