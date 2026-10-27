@@ -496,6 +496,18 @@ local function is_auth_rejected(err)
 end
 
 
+-- `ngx.log` rejects a table without `__tostring`, a function and a thread. A hook can
+-- raise those, and the log call must not raise a second error.
+local function to_string(value)
+    local ok, str = pcall(tostring, value)
+    if ok then
+        return str
+    end
+
+    return "unknown error"
+end
+
+
 -- Repeat AUTH once when the caller can change the credentials:
 -- `config.auth_config_reconfigurer(self, err)` returns `true` after it updated `self.config`.
 -- AUTH fails before the library sends a command to this node, so no command runs twice.
@@ -514,11 +526,11 @@ local function check_auth_with_retry(self, redis_client)
 
     local called, retry = pcall(reconfigure, self, auth_err)
     if not called then
-        ngx_log(NGX_ERR, "auth_config_reconfigurer failed: ", retry)
+        ngx_log(NGX_ERR, "auth_config_reconfigurer failed: ", to_string(retry))
         return ok, auth_err
     end
 
-    if retry then
+    if retry == true then
         ok, auth_err = check_auth(self, redis_client)
     end
 

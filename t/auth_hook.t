@@ -429,3 +429,130 @@ GET /t
 new: failed\s+hook calls: 0
 --- error_log
 NOAUTH
+
+=== TEST 11: a hook that raises a table does not stop the request
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookCluster11",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                auth = "wrong-password",
+                auth_config_reconfigurer = function() error({ code = 403 }) end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say(red and "created" or "failed", ": ", err and err:find("WRONGPASS", 1, true) and "WRONGPASS" or tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+failed: .*WRONGPASS.*
+--- error_log
+auth_config_reconfigurer failed: table:
+
+=== TEST 12: a hook that raises a function does not stop the request
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookCluster12",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                auth = "wrong-password",
+                auth_config_reconfigurer = function() error(function() end) end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say(red and "created" or "failed", ": ", err and err:find("WRONGPASS", 1, true) and "WRONGPASS" or tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+failed: .*WRONGPASS.*
+--- error_log
+auth_config_reconfigurer failed: function:
+
+=== TEST 13: a hook that raises nil does not stop the request
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookCluster13",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                auth = "wrong-password",
+                auth_config_reconfigurer = function() error(nil) end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say(red and "created" or "failed", ": ", err and err:find("WRONGPASS", 1, true) and "WRONGPASS" or tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+failed: .*WRONGPASS.*
+--- error_log
+auth_config_reconfigurer failed: nil
+
+=== TEST 14: a truthy return value that is not true does not repeat AUTH
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookCluster14",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                auth = "wrong-password",
+                auth_config_reconfigurer = function(self, err)
+                    self.config.auth = "kong"
+                    return "yes"
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say(red and "created" or "failed", ": ", err and err:find("WRONGPASS", 1, true) and "WRONGPASS" or tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+failed: .*WRONGPASS.*
+--- error_log
+failed to fetch slots
