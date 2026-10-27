@@ -185,7 +185,9 @@ end
 
 
 local function release_connection(red, config)
-    if red.auth_credentials_changed then
+    -- `resty.redis` returns a command function for any unknown field name, so read the
+    -- flag with rawget. Otherwise this branch always runs and no connection is pooled.
+    if rawget(red, "auth_credentials_changed") then
         -- Do not pool this connection: it authenticated with a password that the caller
         -- replaced, and another client with the old password could reuse it.
         red:close()

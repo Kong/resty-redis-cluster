@@ -656,3 +656,41 @@ GET /t
 base_pool: user-pool
 --- no_error_log
 [error]
+
+=== TEST 17: a command returns its connection to the pool
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookPoolReuse",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "kong",
+                -- The password is correct, so the hook must not run. The connection must
+                -- still go back to the pool.
+                auth_config_reconfigurer = function() error("must not run") end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(config))
+            assert(red:set("pool-key", "value"))
+
+            -- Connect to the node and the pool that the command used.
+            local pool = config.connect_opts.pool
+            local ip, port = pool:match("^([^:]+):(%d+):")
+            local probe = assert(require("resty.redis"):new())
+            assert(probe:connect(ip, tonumber(port), { pool = pool }))
+            ngx.say("reused: ", tostring(probe:get_reused_times() > 0))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+reused: true
+--- no_error_log
+[error]
