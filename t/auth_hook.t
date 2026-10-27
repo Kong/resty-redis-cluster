@@ -662,6 +662,16 @@ base_pool: user-pool
 --- config
     location /t {
         content_by_lua '
+            local resty_redis = require "resty.redis"
+
+            -- Record the node and the pool name of the last connection.
+            local connect = resty_redis.connect
+            local used
+            resty_redis.connect = function(self, host, port, opts)
+                used = { host = host, port = port, pool = opts and opts.pool }
+                return connect(self, host, port, opts)
+            end
+
             local config = {
                 name = "hookPoolReuse",
                 serv_list = {
@@ -680,11 +690,10 @@ base_pool: user-pool
             local red = assert(redis:new(config))
             assert(red:set("pool-key", "value"))
 
-            -- Connect to the node and the pool that the command used.
-            local pool = config.connect_opts.pool
-            local ip, port = pool:match("^([^:]+):(%d+):")
-            local probe = assert(require("resty.redis"):new())
-            assert(probe:connect(ip, tonumber(port), { pool = pool }))
+            resty_redis.connect = connect
+
+            local probe = resty_redis:new()
+            assert(probe:connect(used.host, used.port, { pool = used.pool }))
             ngx.say("reused: ", tostring(probe:get_reused_times() > 0))
         ';
     }
@@ -692,5 +701,77 @@ base_pool: user-pool
 GET /t
 --- response_body
 reused: true
+--- no_error_log
+[error]
+
+=== TEST 18: the library does not change the pool name of the caller
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookUserPool",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "kong",
+                connect_opts = { pool = "user-pool", ssl = false },
+                -- The password is correct, so the hook must not run.
+                auth_config_reconfigurer = function() error("must not run") end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(config))
+            assert(red:set("pool-key", "value"))
+
+            ngx.say("caller pool: ", tostring(config.connect_opts.pool))
+            ngx.say("base pool: ", tostring(config.base_pool))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+caller pool: user-pool
+base pool: user-pool
+--- no_error_log
+[error]
+
+=== TEST 19: a config table works with a second instance
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookReusedConfig",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "kong",
+            }
+
+            local redis = require "resty.rediscluster"
+            local first = assert(redis:new(config))
+            local first_base = config.base_pool
+            assert(first:set("pool-key", "value"))
+
+            local second = assert(redis:new(config))
+
+            ngx.say("pool in config: ", tostring(config.connect_opts and config.connect_opts.pool))
+            ngx.say("base pool is stable: ", tostring(config.base_pool == first_base))
+            ngx.say("base pool has no address: ", tostring(config.base_pool:find("127.0.0.1", 1, true) == nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+pool in config: nil
+base pool is stable: true
+base pool has no address: true
 --- no_error_log
 [error]

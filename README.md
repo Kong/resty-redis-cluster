@@ -147,9 +147,12 @@ secret store. Do not put credentials in the error message; the library logs that
 The first call to `new()` and a slot refresh hold a lock while the function runs. Keep the function
 short; other callers wait for the lock.
 
-When the function updates the credentials, the library does not return that connection to the pool
-named after the previous password. The next connection uses the new name. When you set
-`connect_opts.pool`, the library keeps your pool name.
+When the function updates `password`, the library does not return that connection to the pool named
+after the previous password. The next connection uses the new name. The library changes
+`config.base_pool` only; it never changes the `connect_opts.pool` value that you set.
+
+With the legacy `auth` option, the pool name does not include the credential. When you set
+`connect_opts.pool`, you own the pool name and the isolation between credentials.
 
 ```lua
 local config = {

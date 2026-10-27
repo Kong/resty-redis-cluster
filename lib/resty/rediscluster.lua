@@ -138,23 +138,38 @@ end
 -- Rebuild the pool name from the current credentials. The caller owns the name when it
 -- sets `connect_opts.pool`, so leave that name alone.
 local function refresh_base_pool_name(conf)
-    if conf.user_pool then
+    if conf.connect_opts and conf.connect_opts.pool then
         return true
-    end
-
-    if conf.connect_opts then
-        conf.connect_opts.pool = nil
     end
 
     return set_base_pool_name(conf)
 end
 
 
-local function set_poolname(ip, port, config)
-  -- concat the ip and port of the node to the base pool name
-  local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
-  config.connect_opts.pool = pool
-  ngx_log(NGX_DEBUG, "set pool name: ", pool)
+-- Connect to a node with the pool name for that node. `sock:connect` reads the pool
+-- name when the call starts, so restore `connect_opts.pool` right after it returns. The
+-- caller's table keeps the value that it gave us (or nil).
+local function connect_with_pool(redis_client, ip, port, config)
+    local opts = config.connect_opts
+    if not opts then
+        opts = {}
+        config.connect_opts = opts
+    end
+
+    local previous = opts.pool
+    opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
+    ngx_log(NGX_DEBUG, "set pool name: ", opts.pool)
+
+    -- Restore the value that the caller gave us even when `connect` raises. A shared table
+    -- must never keep a runtime pool name.
+    local finished, connected, err = pcall(redis_client.connect, redis_client, ip, port, opts)
+    opts.pool = previous
+
+    if not finished then
+        error(connected, 0)
+    end
+
+    return connected, err
 end
 
 
@@ -557,7 +572,7 @@ local function check_auth_with_retry(self, redis_client)
     if retry == true then
         ok, auth_err = check_auth(self, redis_client)
 
-        if ok and not self.config.user_pool then
+        if ok and not (self.config.connect_opts and self.config.connect_opts.pool) then
             -- The connection now holds credentials that differ from the pool name.
             redis_client.auth_credentials_changed = true
 
@@ -593,8 +608,7 @@ local function try_hosts_slots(self, serv_list)
         -- Kong currently does not configure 'max_connection_attempts'
         for k = 1, config.max_connection_attempts or DEFAULT_MAX_CONNECTION_ATTEMPTS do
             -- for each ip:port pair, we try at least once before check total timeout
-            set_poolname(ip, port, self.config)
-            ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+            ok, err = connect_with_pool(redis_client, ip, port, self.config)
             if ok then break end
             ngx_log(NGX_ERR, "unable to connect ip:port ", ip, ":", port, ", attempt ", k, ", error: ", err)
             table_insert(errors, err)
@@ -799,10 +813,6 @@ function _M.new(_, config)
     local inst = { config = config }
     inst = setmetatable(inst, mt)
 
-    -- `set_poolname` overwrites `connect_opts.pool` for each connection. Keep the value
-    -- that the caller gave us to know whether the library owns the pool name.
-    inst.config.user_pool = inst.config.connect_opts and inst.config.connect_opts.pool
-
     local ok, err = set_base_pool_name(inst.config)
     if not ok then
       return nil, err
@@ -996,8 +1006,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             -- asking redirection should only happens at master nodes
             ip, port, slave = target_ip, target_port, false
 
-            set_poolname(ip, port, self.config)
-            ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+            ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
             if ok then break end
         else
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
@@ -1010,8 +1019,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     return nil, err
                 end
 
-                set_poolname(ip, port, self.config)
-                ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+                ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
                 if ok then break end
             end
         end
@@ -1123,8 +1131,7 @@ local function _do_cmd_master(self, cmd, key, ...)
         redis_client:set_timeouts(self.config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   self.config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   self.config.read_timeout or DEFAULT_READ_TIMEOUT)
-        set_poolname(master.ip, master.port, self.config)
-        local ok, err = redis_client:connect(master.ip, master.port, self.config.connect_opts)
+        local ok, err = connect_with_pool(redis_client, master.ip, master.port, self.config)
         if ok then
             local _, auth_err = check_auth_with_retry(self, redis_client)
             if auth_err then
@@ -1295,8 +1302,7 @@ function _M.commit_pipeline(self)
             redis_client:set_timeouts(config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                       config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                       config.read_timeout or DEFAULT_READ_TIMEOUT)
-            set_poolname(ip, port, self.config)
-            ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+            ok, err = connect_with_pool(redis_client, ip, port, self.config)
             if ok then break end
             table_insert(errors, ip .. ":" .. port .. " " .. err)
         end
