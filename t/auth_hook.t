@@ -358,3 +358,74 @@ GET /t
 set: OK, hook calls: 1
 --- no_error_log
 [error]
+
+=== TEST 9: the hook does not run for a non-AUTH error
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local calls = 0
+            -- This nginx listens on the port below. It accepts the TCP connection, but it
+            -- does not speak Redis, so the AUTH step fails with an error that is not
+            -- "rejected credentials".
+            local config = {
+                name = "hookCluster9",
+                serv_list = { { ip = "127.0.0.1", port = tonumber(ngx.var.server_port) } },
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                auth = "kong",
+                force_auth = true,
+                auth_config_reconfigurer = function(self, err)
+                    calls = calls + 1
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say("new: ", red and "ok" or "failed")
+            ngx.say("hook calls: ", calls)
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+new: failed\s+hook calls: 0
+--- error_log
+failed to fetch slots
+
+=== TEST 10: the hook does not run when no credential is configured
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local calls = 0
+            local config = {
+                name = "hookCluster10",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                auth_config_reconfigurer = function(self, err)
+                    calls = calls + 1
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say("new: ", red and "ok" or "failed")
+            ngx.say("hook calls: ", calls)
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+new: failed\s+hook calls: 0
+--- error_log
+NOAUTH

@@ -132,14 +132,16 @@ else
 end
 ```
 
-`auth_config_reconfigurer` is optional. The library calls it when an AUTH attempt fails. When
-given, it **must** update `config.auth`, `config.username` or `config.password` and return `true`.
-The library then repeats AUTH once on the same connection. When it returns `false` or `nil`, the
-library reports the original AUTH error. AUTH fails before the library sends a command, so no
-command runs twice.
+`auth_config_reconfigurer` is optional. The library calls it when Redis rejects the credentials,
+for example when the error contains `WRONGPASS` or `invalid password`. It does not call it for a
+dead connection or a socket error, because a new secret cannot fix those. When the configuration
+has no credential, the library does not call it either. When given, it **must** update
+`config.auth`, `config.username` or `config.password` and return `true`. The library then repeats
+AUTH once on the same connection. When it returns `false` or `nil`, the library reports the original
+AUTH error. AUTH fails before the library sends a command, so no command runs twice.
 
-The function runs for each failed AUTH attempt. Keep it fast, and throttle reads from the secret
-store. Do not put credentials in the error message; the library logs that message.
+The function runs once for each rejected connection. Keep it fast, and throttle reads from the
+secret store. Do not put credentials in the error message; the library logs that message.
 
 ```lua
 local config = {

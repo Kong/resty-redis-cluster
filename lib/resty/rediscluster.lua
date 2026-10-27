@@ -472,6 +472,30 @@ local function parse_slots(self, redis_client)
 end
 
 
+-- Redis texts that mean the server rejected the credentials. A dead connection or a
+-- socket error does not match: a new secret cannot fix those.
+local AUTH_REJECTED_MARKERS = {
+    "WRONGPASS",          -- Redis 6 and later
+    "invalid password",   -- Redis 5 and earlier: "ERR invalid password"
+    "NOAUTH",             -- kept for future call paths
+}
+
+
+local function is_auth_rejected(err)
+    if type(err) ~= "string" then
+        return false
+    end
+
+    for i = 1, #AUTH_REJECTED_MARKERS do
+        if string_find(err, AUTH_REJECTED_MARKERS[i], 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+
 -- Repeat AUTH once when the caller can change the credentials:
 -- `config.auth_config_reconfigurer(self, err)` returns `true` after it updated `self.config`.
 -- AUTH fails before the library sends a command to this node, so no command runs twice.
@@ -479,17 +503,23 @@ end
 -- original AUTH error.
 local function check_auth_with_retry(self, redis_client)
     local ok, auth_err = check_auth(self, redis_client)
-    if auth_err then
-        local reconfigure = self.config.auth_config_reconfigurer
-        if reconfigure then
-            local called, retry = pcall(reconfigure, self, auth_err)
-            if not called then
-                ngx_log(NGX_ERR, "auth_config_reconfigurer failed: ", retry)
+    if not auth_err then
+        return ok, auth_err
+    end
 
-            elseif retry then
-                ok, auth_err = check_auth(self, redis_client)
-            end
-        end
+    local reconfigure = self.config.auth_config_reconfigurer
+    if not reconfigure or not is_auth_rejected(auth_err) then
+        return ok, auth_err
+    end
+
+    local called, retry = pcall(reconfigure, self, auth_err)
+    if not called then
+        ngx_log(NGX_ERR, "auth_config_reconfigurer failed: ", retry)
+        return ok, auth_err
+    end
+
+    if retry then
+        ok, auth_err = check_auth(self, redis_client)
     end
 
     return ok, auth_err
