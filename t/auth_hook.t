@@ -556,3 +556,103 @@ GET /t
 failed: .*WRONGPASS.*
 --- error_log
 failed to fetch slots
+
+=== TEST 15: a connection with new credentials does not enter the old pool
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local serv_list = {
+                { ip = "127.0.0.1", port = 6371 },
+                { ip = "127.0.0.1", port = 6372 },
+                { ip = "127.0.0.1", port = 6373 },
+            }
+
+            local cfg_a = {
+                name = "hookPoolA",
+                serv_list = serv_list,
+                username = "default",
+                password = "wrong-password",
+                auth_config_reconfigurer = function(self, err)
+                    self.config.password = "kong"
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local a, aerr = redis:new(cfg_a)
+            if not a then
+                ngx.say("A failed: ", aerr)
+                return
+            end
+
+            assert(a:set("pool-key", "value"))
+
+            local cfg_b = {
+                name = "hookPoolB",
+                serv_list = serv_list,
+                username = "default",
+                password = "kong",
+            }
+            assert(redis:new(cfg_b))
+
+            local cfg_c = {
+                name = "hookPoolC",
+                serv_list = serv_list,
+                username = "default",
+                password = "wrong-password",
+            }
+            local c, cerr = redis:new(cfg_c)
+
+            ngx.say("A and B share the pool name: ", tostring(cfg_a.base_pool == cfg_b.base_pool))
+            ngx.say("C created: ", c and "yes" or "no")
+            ngx.say("C error is WRONGPASS: ", tostring(cerr ~= nil and cerr:find("WRONGPASS", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+A and B share the pool name: true
+C created: no
+C error is WRONGPASS: true
+--- error_log
+failed to fetch slots: WRONGPASS
+
+=== TEST 16: an explicit pool name is not changed
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookPoolP",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "wrong-password",
+                connect_opts = { pool = "user-pool" },
+                auth_config_reconfigurer = function(self, err)
+                    self.config.password = "kong"
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local p, perr = redis:new(config)
+            if not p then
+                ngx.say("failed: ", perr)
+                return
+            end
+
+            assert(p:set("pool-key", "value"))
+            ngx.say("base_pool: ", config.base_pool)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+base_pool: user-pool
+--- no_error_log
+[error]

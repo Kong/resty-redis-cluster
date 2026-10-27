@@ -135,6 +135,21 @@ local function set_base_pool_name(conf)
 end
 
 
+-- Rebuild the pool name from the current credentials. The caller owns the name when it
+-- sets `connect_opts.pool`, so leave that name alone.
+local function refresh_base_pool_name(conf)
+    if conf.user_pool then
+        return true
+    end
+
+    if conf.connect_opts then
+        conf.connect_opts.pool = nil
+    end
+
+    return set_base_pool_name(conf)
+end
+
+
 local function set_poolname(ip, port, config)
   -- concat the ip and port of the node to the base pool name
   local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
@@ -170,6 +185,13 @@ end
 
 
 local function release_connection(red, config)
+    if red.auth_credentials_changed then
+        -- Do not pool this connection: it authenticated with a password that the caller
+        -- replaced, and another client with the old password could reuse it.
+        red:close()
+        return
+    end
+
     local ok,err = red:set_keepalive(config.keepalive_timeout
             or DEFAULT_KEEPALIVE_TIMEOUT, config.keepalive_cons or DEFAULT_KEEPALIVE_CONS)
     if not ok then
@@ -532,6 +554,16 @@ local function check_auth_with_retry(self, redis_client)
 
     if retry == true then
         ok, auth_err = check_auth(self, redis_client)
+
+        if ok and not self.config.user_pool then
+            -- The connection now holds credentials that differ from the pool name.
+            redis_client.auth_credentials_changed = true
+
+            local refreshed, refresh_err = refresh_base_pool_name(self.config)
+            if not refreshed then
+                ngx_log(NGX_ERR, "failed to refresh the pool name: ", refresh_err)
+            end
+        end
     end
 
     return ok, auth_err
@@ -764,6 +796,10 @@ function _M.new(_, config)
 
     local inst = { config = config }
     inst = setmetatable(inst, mt)
+
+    -- `set_poolname` overwrites `connect_opts.pool` for each connection. Keep the value
+    -- that the caller gave us to know whether the library owns the pool name.
+    inst.config.user_pool = inst.config.connect_opts and inst.config.connect_opts.pool
 
     local ok, err = set_base_pool_name(inst.config)
     if not ok then

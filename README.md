@@ -144,12 +144,24 @@ twice.
 The function runs once for each rejected connection. Keep it fast, and throttle reads from the
 secret store. Do not put credentials in the error message; the library logs that message.
 
+The first call to `new()` and a slot refresh hold a lock while the function runs. Keep the function
+short; other callers wait for the lock.
+
+When the function updates the credentials, the library does not return that connection to the pool
+named after the previous password. The next connection uses the new name. When you set
+`connect_opts.pool`, the library keeps your pool name.
+
 ```lua
 local config = {
     -- ...
     auth_config_reconfigurer = function(self, err)
         -- Read the current credentials from your store, then update the config.
-        self.config.password = read_password()
+        local password = read_password()
+        if not password then
+            return false
+        end
+
+        self.config.password = password
         return true
     end,
 }
