@@ -177,3 +177,58 @@ result: bar err: nil
 connects to a hostname: 0 asking: 1
 --- no_error_log
 [error]
+
+
+=== TEST 4: an ASK reply inside a pipeline is retried on the target node
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.topology = 1
+            fake.handler = function(self, cmd)
+                if cmd == "get" and self._node == "127.0.0.1:7003" then
+                    -- The real client keeps a queued error reply as {false, message}.
+                    return false, "ASK 12182 127.0.0.1:7001"
+                elseif cmd == "asking" then
+                    return "OK"
+                elseif cmd == "get" and self._node == "127.0.0.1:7001" then
+                    return "bar"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "askPipelineCluster",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            red:init_pipeline()
+            red:get("foo")
+            local res, err = red:commit_pipeline()
+            if not res then
+                ngx.say("failed: ", err)
+                return
+            end
+            ngx.say("result: ", tostring(res[1]), " err: ", tostring(err))
+
+            local asking = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "asking" then asking = asking + 1 end
+            end
+            ngx.say("asking: ", asking)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result: bar err: nil
+asking: 1
+--- no_error_log
+[error]
