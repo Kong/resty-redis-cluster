@@ -117,10 +117,15 @@ local function set_base_pool_name(conf)
     base_pool = opts.pool
 
   else
-    -- `check_auth` uses `auth` first, then `username` + `password`. The pool name must
-    -- contain the secret that the library sends.
-    local uses_auth = type(conf.auth) == "string"
-    local secret = uses_auth and conf.auth or conf.password
+    -- `check_auth` sends a field only when it is a string. A `nil` or an `ngx.null`
+    -- password must not reach the hash, and a non-string field must not be concatenated.
+    local auth = type(conf.auth) == "string" and conf.auth or nil
+    local password = type(conf.password) == "string" and conf.password or nil
+    local username = type(conf.username) == "string" and conf.username or nil
+    local server_name = type(opts.server_name) == "string" and opts.server_name or nil
+
+    local uses_auth = auth ~= nil
+    local secret = uses_auth and auth or password
 
     local hashed_secret, err = hash_password(secret)
     if not hashed_secret then
@@ -130,8 +135,8 @@ local function set_base_pool_name(conf)
 
     base_pool = tostring(opts.ssl)
                 .. ":" .. tostring(opts.ssl_verify)
-                .. ":" .. (opts.server_name or "")
-                .. ":" .. (uses_auth and "" or (conf.username or ""))
+                .. ":" .. (server_name or "")
+                .. ":" .. (uses_auth and "" or (username or ""))
                 .. ":" .. hashed_secret
 
   end

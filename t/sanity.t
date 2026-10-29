@@ -1061,3 +1061,36 @@ parsed_key: {bar
 parsed_key: bar
 --- no_error_log
 [error]
+
+=== TEST 16: non-string credential fields do not stop new()
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "nullFields",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = ngx.null,
+                password = ngx.null,
+                connect_opts = {
+                    server_name = ngx.null,
+                },
+            }
+
+            local redis = require "resty.rediscluster"
+            local ok, res = pcall(redis.new, redis, config)
+            ngx.say("raised: ", tostring(not ok))
+            ngx.say("created: ", tostring(ok and res ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+raised: false
+created: true
+--- no_error_log
+[error]
