@@ -891,3 +891,108 @@ GET /t
 reused: false
 --- no_error_log
 [error]
+
+=== TEST 21: the pool name contains the auth value
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local serv_list = {
+                { ip = "127.0.0.1", port = 6371 },
+                { ip = "127.0.0.1", port = 6372 },
+                { ip = "127.0.0.1", port = 6373 },
+            }
+
+            local redis = require "resty.rediscluster"
+            local good, good_err = redis:new({
+                name = "hookAuthNameGood",
+                serv_list = serv_list,
+                auth = "kong",
+            })
+            if not good then
+                ngx.say("good failed: ", good_err)
+                return
+            end
+
+            -- The password is wrong: `new()` fails after the library computed the pool
+            -- name, so the config table still shows it.
+            local bad = {
+                name = "hookAuthNameBad",
+                serv_list = serv_list,
+                auth = "wrong-password",
+            }
+            local bad_instance, bad_err = redis:new(bad)
+
+            ngx.say("bad created: ", bad_instance and "yes" or "no")
+            ngx.say("bad error has WRONGPASS: ", tostring(bad_err ~= nil and tostring(bad_err):find("WRONGPASS", 1, true) ~= nil))
+            ngx.say("good pool has a credential: ", tostring(good.config.base_pool:find("^nil:nil:::[0-9a-f]+$") ~= nil))
+            ngx.say("pool names differ: ", tostring(good.config.base_pool ~= bad.base_pool))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+bad created: no
+bad error has WRONGPASS: true
+good pool has a credential: true
+pool names differ: true
+--- error_log
+failed to fetch slots: WRONGPASS
+
+=== TEST 22: auth configurations do not share a pool
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local serv_list = {
+                { ip = "127.0.0.1", port = 6371 },
+                { ip = "127.0.0.1", port = 6372 },
+                { ip = "127.0.0.1", port = 6373 },
+            }
+
+            local cfg_a = {
+                name = "hookAuthPoolA",
+                serv_list = serv_list,
+                auth = "wrong-password",
+                auth_config_reconfigurer = function(self, err)
+                    self.config.auth = "kong"
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local a, aerr = redis:new(cfg_a)
+            if not a then
+                ngx.say("A failed: ", aerr)
+                return
+            end
+            assert(a:set("auth-pool-key", "value"))
+
+            local cfg_b = {
+                name = "hookAuthPoolB",
+                serv_list = serv_list,
+                auth = "kong",
+            }
+            assert(redis:new(cfg_b))
+
+            ngx.say("A and B share the pool name: ", tostring(cfg_a.base_pool == cfg_b.base_pool))
+
+            local cfg_c = {
+                name = "hookAuthPoolC",
+                serv_list = serv_list,
+                auth = "wrong-password",
+            }
+            local c, cerr = redis:new(cfg_c)
+
+            ngx.say("C created: ", c and "yes" or "no")
+            ngx.say("C error has WRONGPASS: ", tostring(cerr ~= nil and tostring(cerr):find("WRONGPASS", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+A and B share the pool name: true
+C created: no
+C error has WRONGPASS: true
+--- error_log
+failed to fetch slots: WRONGPASS

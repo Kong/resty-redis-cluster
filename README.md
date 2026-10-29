@@ -147,12 +147,13 @@ secret store. Do not put credentials in the error message; the library logs that
 The first call to `new()` and a slot refresh hold a lock while the function runs. Keep the function
 short; other callers wait for the lock.
 
-When the function updates `password`, the library does not return that connection to the pool named
-after the previous password. The next connection uses the new name. The library changes
+When the function updates the credentials, the library does not return that connection to the pool
+named after the previous password. The next connection uses the new name. The library changes
 `config.base_pool` only; it never changes the `connect_opts` table that you pass.
 
-With the legacy `auth` option, the pool name does not include the credential. When you set
-`connect_opts.pool`, you own the pool name and the isolation between credentials.
+The pool name contains the secret that the library sends: `auth` for the legacy option, or
+`username` and `password` for Redis 6. When you set `connect_opts.pool`, you own the pool name and
+the isolation between credentials.
 
 ```lua
 local config = {
@@ -412,6 +413,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 1. Add the `auth_config_reconfigurer` option. When Redis rejects AUTH, the library calls it and repeats AUTH once on the same connection after it updates the credentials.
 2. Return normal connections to the pool. A connection that replaced its credentials is still closed instead.
+3. Include the `auth` value in the pool name. A configuration that uses the legacy `auth` option gets a new pool name after the upgrade, so its idle connections are not reused once.
 
 #### 1.6.1
 

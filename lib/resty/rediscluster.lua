@@ -117,8 +117,13 @@ local function set_base_pool_name(conf)
     base_pool = opts.pool
 
   else
-    local hashed_password, err = hash_password(conf.password)
-    if not hashed_password then
+    -- `check_auth` uses `auth` first, then `username` + `password`. The pool name must
+    -- contain the secret that the library sends.
+    local uses_auth = type(conf.auth) == "string"
+    local secret = uses_auth and conf.auth or conf.password
+
+    local hashed_secret, err = hash_password(secret)
+    if not hashed_secret then
       ngx_log(NGX_ERR, "failed to hash the password: ", err)
       return nil, err
     end
@@ -126,8 +131,8 @@ local function set_base_pool_name(conf)
     base_pool = tostring(opts.ssl)
                 .. ":" .. tostring(opts.ssl_verify)
                 .. ":" .. (opts.server_name or "")
-                .. ":" .. (conf.username or "")
-                .. ":" .. (hashed_password or "")
+                .. ":" .. (uses_auth and "" or (conf.username or ""))
+                .. ":" .. hashed_secret
 
   end
   conf.base_pool = base_pool
