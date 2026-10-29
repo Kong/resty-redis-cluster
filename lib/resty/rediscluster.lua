@@ -999,6 +999,33 @@ local function generate_magic_seed(self)
 end
 
 
+-- An ASK reply names the address to use. On a Redis 7 cluster that announces
+-- hostnames, that address is a hostname and the slot map also holds the IP of
+-- the same node. Return the IP first, then the address of the reply.
+local function ask_targets(self, host, port)
+    local targets = {}
+    local want_port = tostring(port)
+    local all = slot_cache[self.config.name .. "serv_list"]
+
+    -- parse_slots() stores the IP of a node right before its hostname.
+    local serv_list = all and all.serv_list or {}
+    for i = 2, #serv_list, 2 do
+        local hostname = serv_list[i]
+        local ip = serv_list[i - 1]
+        if hostname.ip == host
+           and tostring(hostname.port) == want_port
+           and ip and ip.ip ~= host
+           and tostring(ip.port) == want_port then
+            targets[1] = { ip = ip.ip, port = ip.port }
+            break
+        end
+    end
+
+    targets[#targets + 1] = { ip = host, port = port }
+    return targets
+end
+
+
 local function handle_command_with_retry(self, target_ip, target_port, asking, cmd, key, ...)
     local config = self.config
 
@@ -1115,7 +1142,24 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                         if ask_host ~= nil and ask_port ~= nil then
                             -- only put back to connection pool when there are no errors
                             release_connection(redis_client, config)
-                            return handle_command_with_retry(self, ask_host, ask_port, true, cmd, key, ...)
+
+                            -- Try the IP of the target first, then the address of the reply.
+                            local last_err
+                            local targets = ask_targets(self, ask_host, ask_port)
+                            for i = 1, #targets do
+                                local target = targets[i]
+                                local res, ask_err = handle_command_with_retry(self, target.ip,
+                                                                               target.port, true,
+                                                                               cmd, key, ...)
+                                if res ~= nil then
+                                    return res, ask_err
+                                end
+                                last_err = ask_err
+                            end
+
+                            ngx_log(NGX_ERR, "asking redirection failed for every target: ",
+                                    tostring(last_err))
+                            return nil, last_err
                         else
                             redis_client:close()
                             self:refresh_slots()
