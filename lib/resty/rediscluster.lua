@@ -746,6 +746,16 @@ function _M.fetch_slots(self)
 end
 
 
+-- ngx.worker.id() is nil in the master process and in a privileged agent.
+local function worker_key()
+    local id = ngx.worker.id()
+    if id == nil then
+        return "p" .. ngx.worker.pid()
+    end
+    return id
+end
+
+
 local function unlock(self, lock, msg)
     if not lock then
         return nil, "lock can not be nil"
@@ -768,8 +778,7 @@ function _M.refresh_slots(self)
         return nil, err
     end
 
-    local worker_id = ngx.worker.id()
-    local refresh_lock_key = (self.config.refresh_lock_key or DEFAULT_REFRESH_DICT_NAME) .. worker_id
+    local refresh_lock_key = (self.config.refresh_lock_key or DEFAULT_REFRESH_DICT_NAME) .. worker_key()
     elapsed, err = lock:lock(refresh_lock_key)
     if not elapsed then
         ngx_log(NGX_ERR, "failed to acquire the lock in refreshing slot cache: ", err)
@@ -799,7 +808,7 @@ function _M.init_slots(self)
     end
 
     -- The slot cache is per worker. A slow hook in one worker must not block the others.
-    elapsed, err = lock:lock("redis_cluster_slot_" .. self.config.name .. "_" .. ngx.worker.id())
+    elapsed, err = lock:lock("redis_cluster_slot_" .. self.config.name .. "_" .. worker_key())
     if not elapsed then
         err_msg = "failed to acquire the lock in initializing slot cache: " .. tostring(err)
         ngx_log(NGX_ERR, err_msg)
