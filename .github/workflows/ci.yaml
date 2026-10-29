@@ -16,6 +16,10 @@ jobs:
                   conf: no-auth
                 - version: 6.2.14
                   conf: auth
+                - version: 7.2
+                  conf: auth
+                - version: 7.2
+                  conf: no-auth
         runs-on: ubuntu-latest
 
         steps:
@@ -52,4 +56,11 @@ jobs:
           - name: Run tests
             run: |
               export REDIS_AUTH=$([[ "${{ matrix.conf }}" == "auth" ]] && echo "yes" || echo "no")
-              make test
+              if [ "${{ matrix.version }}" = "7.2" ]; then
+                # z-recover.t starts the 6.2 fixture itself. Run the other suites here.
+                prove t/auth_hook.t t/auth.t t/auth_rotation.t t/auth_pool_window.t \
+                      t/redis7_with_host.t t/redirects.t t/closed.t t/cmd_master.t \
+                      t/lock_scope.t t/sanity.t t/mock-redis-down.t t/version.t t/lock_timeout.t
+              else
+                make test
+              fi

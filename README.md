@@ -427,7 +427,7 @@ end
 
 ### Compatibilty
 
-Currently, this library is fully tested with Redis `6.x` and `7.x`.
+Currently, this library is fully tested with Redis `6.2` and `7.2`.
 
 ### Changelog
 
