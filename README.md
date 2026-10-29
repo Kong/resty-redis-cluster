@@ -443,7 +443,7 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the full s
 4. Follow ASK and MOVED redirects for a single command, and for a pipeline that receives ASK.
 5. Add `retry_on_closed_connection` to retry a single command that fails with `closed` on a pooled connection. It is off by default and at-least-once.
 6. Run `flushall` and `flushdb` on every master and list the failed nodes in the error.
-7. Mask the credential in the pool-name DEBUG log.
+7. Remove the pool name from the DEBUG log. The name contains a hash of the credential.
 8. Use one slot fetch lock for each worker. A slow auth hook in one worker no longer blocks the others.
 
 #### 1.6.1

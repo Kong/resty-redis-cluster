@@ -146,18 +146,6 @@ local function set_base_pool_name(conf)
 end
 
 
--- The last part of a library pool name is a hash of the credential. Keep it out of the
--- DEBUG log: a weak password can be found with a dictionary against a fast hash.
-local function mask_pool_name(name)
-    local colon = string_find(name, ":[^:]*$")
-    if not colon or colon == #name then
-        return name
-    end
-
-    return string_sub(name, 1, colon) .. "<credential>"
-end
-
-
 -- Rebuild the pool name from the current credentials. The caller owns the name when it
 -- sets `connect_opts.pool`, so leave that name alone.
 local function refresh_base_pool_name(conf, user_pool)
@@ -182,12 +170,6 @@ local function connect_with_pool(redis_client, ip, port, config)
     end
 
     connect_opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
-
-    local log_pool = connect_opts.pool
-    if not (config.connect_opts and type(config.connect_opts.pool) == "string") then
-        log_pool = mask_pool_name(log_pool)
-    end
-    ngx_log(NGX_DEBUG, "set pool name: ", log_pool)
 
     -- Remember which credentials produced this pool name. The credentials can change
     -- while `connect` waits on the network.

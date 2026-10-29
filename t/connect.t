@@ -186,27 +186,37 @@ qr/lua tcp socket queued connect timed out/
 
             }
 
+            -- Record the first connection to inspect the pool name.
+            local resty_redis = require "resty.redis"
+            local connect = resty_redis.connect
+            local seen
+            resty_redis.connect = function(self, host, port, opts)
+                if not seen then
+                    seen = { host = host, port = port, pool = opts and opts.pool }
+                end
+                return connect(self, host, port, opts)
+            end
+
             local redis = require "resty.rediscluster"
-            local red, err = redis:new(config)
+            local ok, err = pcall(function()
+                local red = assert(redis:new(config))
+                assert(red:set("dog", "an animal"))
+            end)
 
-            if err then
-                ngx.say("failed to create: ", err)
+            resty_redis.connect = connect
+
+            if not ok then
+                ngx.say("failed: ", err)
                 return
             end
 
-            local res, err = red:set("dog", "an animal")
-            if not res then
-                ngx.say("failed to set dog: ", err)
-                return
-            end
-
-            ngx.say("set dog: ", res)
+            ngx.say("pool has the node: ",
+                    tostring(seen.pool == seen.host .. ":" .. seen.port .. ":" .. config.base_pool))
         ';
     }
 --- request
 GET /t
 --- response_body
-set dog: OK
---- log_level: debug
---- error_log eval
-qr/set pool name: (127.0.0.1|172.2[01].0.3[1-6]):637[1-6]:nil:nil::default:<credential>/
+pool has the node: true
+--- no_error_log
+[error]
