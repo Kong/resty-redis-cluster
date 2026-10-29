@@ -589,16 +589,22 @@ local function check_auth_with_retry(self, redis_client)
     end
 
     if retry == true then
-        ok, auth_err = check_auth(self, redis_client)
-
-        if ok and not user_pool then
-            -- The connection now holds credentials that differ from the pool name.
-            redis_client.auth_credentials_changed = true
-
+        if not user_pool then
+            -- Move the pool name before the retry: another coroutine can connect while
+            -- the retry waits on the network.
             local refreshed, refresh_err = refresh_base_pool_name(self.config, user_pool)
             if not refreshed then
                 ngx_log(NGX_ERR, "failed to refresh the pool name: ", refresh_err)
             end
+        end
+
+        ok, auth_err = check_auth(self, redis_client)
+
+        if ok and not user_pool then
+            -- The connection now holds credentials that differ from the pool name.
+            -- `release_connection` closes it. The flag also covers a failed refresh,
+            -- where the pool name keeps the old credentials.
+            redis_client.auth_credentials_changed = true
         end
     end
 
