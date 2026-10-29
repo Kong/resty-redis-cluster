@@ -811,7 +811,8 @@ function _M.init_slots(self)
         return nil, err_msg
     end
 
-    elapsed, err = lock:lock("redis_cluster_slot_" .. self.config.name)
+    -- The slot cache is per worker. A slow hook in one worker must not block the others.
+    elapsed, err = lock:lock("redis_cluster_slot_" .. self.config.name .. "_" .. ngx.worker.id())
     if not elapsed then
         err_msg = "failed to acquire the lock in initializing slot cache: " .. tostring(err)
         ngx_log(NGX_ERR, err_msg)

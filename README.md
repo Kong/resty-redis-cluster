@@ -151,7 +151,8 @@ Keep the caller side in mind:
   `self.config`, every new request fails AUTH once, calls the hook again, and does not pool the
   connection.
 - **Keep the hook short.** The first `new()` and a slot refresh hold a lock while the hook runs.
-  Other callers wait for `lock_timeout`, which is 5 seconds by default.
+  Other requests in the same worker wait for `lock_timeout`, which is 5 seconds by default. Other
+  workers do not wait for the initial slot fetch.
 - **Throttle the reads.** The library does not rate-limit the hook. Add a cooldown, or the secret
   store sees one read for each rejected connection.
 - **Do not send commands from the hook.** A command on the same instance can fail AUTH again, and
