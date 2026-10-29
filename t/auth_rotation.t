@@ -13,7 +13,7 @@ if (defined($redis_auth) && $redis_auth eq "yes") {
 my $pwd = cwd();
 
 our $HttpConfig = qq{
-    lua_package_path "$pwd/lib/?.lua;;";
+    lua_package_path "$pwd/lib/?.lua;$pwd/t/fixtures/?.lua;;";
     lua_package_cpath "/usr/local/openresty-debug/lualib/?.so;/usr/local/openresty/lualib/?.so;;";
     lua_shared_dict redis_cluster_slot_locks 32k;
 };
@@ -104,5 +104,186 @@ hook calls after new: 1
 pool changed: true
 value: value
 hook calls after get: 1
+--- no_error_log
+[error]
+
+=== TEST 2: a pipeline across masters recovers from a rotation
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local rotation = require "rotation"
+            local MASTERS = { 6371, 6372, 6373 }
+            local OLD, NEW = "pl-old", "pl-new"
+            local user = "rot-pl-" .. tostring(ngx.now()):gsub("%.", "")
+
+            rotation.create(user, OLD, MASTERS)
+
+            local calls = 0
+            local cfg = {
+                name = "rotationPipeline",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = user,
+                password = OLD,
+                -- AUTH runs on each pooled connection, so the rotation is visible
+                -- inside the pipeline.
+                force_auth = true,
+            }
+
+            cfg.auth_config_reconfigurer = function(self, err)
+                calls = calls + 1
+                self.config.password = NEW
+                cfg.password = NEW
+                return true
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(cfg))
+            assert(red:set("pl-a", "0"))
+            assert(red:set("pl-b", "0"))
+
+            rotation.rotate(user, NEW, MASTERS)
+
+            red:init_pipeline()
+            red:incr("pl-a")
+            red:incr("pl-b")
+            local res, err = red:commit_pipeline()
+
+            ngx.say("hook calls: ", calls)
+            ngx.say("values: ", tostring(res and res[1]), ",", tostring(res and res[2]))
+            ngx.say("error: ", tostring(err))
+
+            rotation.remove(user, MASTERS)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+hook calls: 1
+values: 1,1
+error: nil
+--- no_error_log
+[error]
+
+=== TEST 3: a slot refresh recovers from a rotation
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local rotation = require "rotation"
+            local MASTERS = { 6371, 6372, 6373 }
+            local OLD, NEW = "ref-old", "ref-new"
+            local user = "rot-ref-" .. tostring(ngx.now()):gsub("%.", "")
+
+            rotation.create(user, OLD, MASTERS)
+
+            local calls = 0
+            local cfg = {
+                name = "rotationRefresh",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = user,
+                password = OLD,
+                force_auth = true,
+            }
+
+            cfg.auth_config_reconfigurer = function(self, err)
+                calls = calls + 1
+                self.config.password = NEW
+                cfg.password = NEW
+                return true
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(cfg))
+            assert(red:set("ref-key", "value"))
+
+            rotation.rotate(user, NEW, MASTERS)
+            red:refresh_slots()
+
+            ngx.say("hook calls: ", calls)
+            ngx.say("value: ", tostring(red:get("ref-key")))
+
+            rotation.remove(user, MASTERS)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+hook calls: 1
+value: value
+--- no_error_log
+[error]
+
+=== TEST 4: a slave read recovers from a rotation
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local rotation = require "rotation"
+            local ALL = rotation.ports()
+            local OLD, NEW = "slave-old", "slave-new"
+            local user = "rot-slave-" .. tostring(ngx.now()):gsub("%.", "")
+
+            -- ACL users are local to each node, so create it on the replicas too.
+            rotation.create(user, OLD, ALL)
+
+            local warm = assert(require("resty.rediscluster"):new({
+                name = "rotationSlaveWarm",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "kong",
+            }))
+            assert(warm:set("slave-key", "value"))
+            assert(warm:wait(1, 1000))
+
+            local calls = 0
+            local cfg = {
+                name = "rotationSlave",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = user,
+                password = OLD,
+                force_auth = true,
+                enable_slave_read = true,
+            }
+
+            cfg.auth_config_reconfigurer = function(self, err)
+                calls = calls + 1
+                self.config.password = NEW
+                cfg.password = NEW
+                return true
+            end
+
+            rotation.rotate(user, NEW, ALL)
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(cfg))
+
+            ngx.say("hook calls: ", calls)
+            ngx.say("value: ", tostring(red:get("slave-key")))
+
+            rotation.remove(user, ALL)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+hook calls: 1
+value: value
 --- no_error_log
 [error]
