@@ -1,5 +1,7 @@
--- A scriptable stand-in for `resty.redis`. It mimics the real client in two ways that matter
--- here: an error reply returns `false, message`, and unknown fields return a command function.
+-- A scriptable stand-in for `resty.redis`. It mimics the real client in the ways that
+-- matter here: an error reply returns `false, message`, a socket error returns
+-- `nil, message`, a queued reply keeps the error, and unknown fields return a command
+-- function.
 local M = {
     events = {},
     nodes = {},
@@ -82,11 +84,15 @@ end
 
 function methods.set_keepalive(self)
     record({ ev = "keepalive", id = self._id, node = self._node })
+    if rawget(self, "_closed") then
+        return nil, "closed"
+    end
     return 1
 end
 
 function methods.close(self)
     record({ ev = "close", id = self._id, node = self._node })
+    self._closed = true
     return 1
 end
 
@@ -115,7 +121,12 @@ local function dispatch(self, cmd, ...)
     if rawget(self, "_pipe") then
         -- Like the real client, a queued command returns nothing; the replies come at commit.
         local q = rawget(self, "_pipe")
-        q[#q + 1] = res
+        if res == nil and err ~= nil then
+            -- A socket error stops the pipeline. commit_pipeline reports it.
+            q.failed = err
+            return
+        end
+        q[#q + 1] = res == false and { false, err } or res
         return
     end
     return res, err
@@ -129,6 +140,9 @@ function methods.commit_pipeline(self)
     local q = rawget(self, "_pipe")
     self._pipe = nil
     record({ ev = "commit", id = self._id, node = self._node, n = #q })
+    if q.failed then
+        return nil, q.failed
+    end
     return q
 end
 
