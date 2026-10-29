@@ -43,7 +43,17 @@ local function slots_v3()
     }
 end
 
-local topologies = { slots_v1, slots_v2, slots_v3 }
+-- Version 4: Redis 7 that announces hostnames. The IP of the same node follows it
+-- in the fourth element, the same way `CLUSTER SLOTS` reports it.
+local function slots_v4()
+    return {
+        { 0, 5460,      { "rc-node-1", 7001, "id1", { "ip", "127.0.0.1" } } },
+        { 5461, 10922,  { "rc-node-2", 7002, "id2", { "ip", "127.0.0.2" } } },
+        { 10923, 16383, { "rc-node-3", 7003, "id3", { "ip", "127.0.0.3" } } },
+    }
+end
+
+local topologies = { slots_v1, slots_v2, slots_v3, slots_v4 }
 
 local NODES = table.concat({
     "id1 127.0.0.1:7001@17001 master - 0 0 1 connected 0-5460",

@@ -116,3 +116,64 @@ result: bar err: nil
 gets: 2
 --- no_error_log
 [error]
+
+
+=== TEST 3: an ASK reply that names a hostname uses the IP of the node
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- Redis 7 that announces hostnames.
+            fake.topology = 4
+            -- The hostnames of the cluster cannot be resolved from this host.
+            fake.connect = function(self, host, port)
+                if host:match("^rc%-node") then
+                    return nil, host .. " could not be resolved"
+                end
+                return 1
+            end
+            fake.handler = function(self, cmd)
+                if cmd == "get" and self._node == "127.0.0.3:7003" then
+                    return false, "ASK 12182 rc-node-1:7001"
+                elseif cmd == "asking" then
+                    return "OK"
+                elseif cmd == "get" and self._node == "127.0.0.1:7001" then
+                    return "bar"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "askHostname",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:get("foo")
+            ngx.say("result: ", tostring(res), " err: ", tostring(err))
+
+            local hostname_connects, asks = 0, 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "connect" and e.node:match("^rc%-node") then
+                    hostname_connects = hostname_connects + 1
+                end
+                if e.ev == "cmd" and e.cmd == "asking" then
+                    asks = asks + 1
+                end
+            end
+            ngx.say("connects to a hostname: ", hostname_connects, " asking: ", asks)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result: bar err: nil
+connects to a hostname: 0 asking: 1
+--- no_error_log
+[error]
