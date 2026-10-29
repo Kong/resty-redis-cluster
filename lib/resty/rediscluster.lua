@@ -1037,7 +1037,6 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             ip, port, slave = target_ip, target_port, false
 
             ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
-            if ok then break end
         else
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
             local tries = redis7_with_host[self.config.name] and 2 or 1
@@ -1090,7 +1089,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
 
             if err then
                 -- todo: we can follow the moved target instead of refreshing the slots
-                if has_moved_signal(res) then
+                if string_sub(err, 1, 5) == "MOVED" or has_moved_signal(res) then
                     ngx_log(NGX_DEBUG, "find MOVED signal, trigger retry for normal commands, cmd:", cmd, " key:", key)
                     -- if retry with moved, we will not asking to specific ip:port anymore
                     target_ip = nil
