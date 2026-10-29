@@ -160,6 +160,10 @@ local function connect_with_pool(redis_client, ip, port, config)
     connect_opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
     ngx_log(NGX_DEBUG, "set pool name: ", connect_opts.pool)
 
+    -- Remember which credentials produced this pool name. The credentials can change
+    -- while `connect` waits on the network.
+    redis_client.pool_base = config.base_pool
+
     return redis_client:connect(ip, port, connect_opts)
 end
 
@@ -196,6 +200,13 @@ local function release_connection(red, config)
     if rawget(red, "auth_credentials_changed") then
         -- Do not pool this connection: it authenticated with a password that the caller
         -- replaced, and another client with the old password could reuse it.
+        red:close()
+        return
+    end
+
+    -- A refresh in another coroutine can change the pool name while this connection
+    -- waits on the network. Do not pool a connection from the previous generation.
+    if rawget(red, "pool_base") ~= config.base_pool then
         red:close()
         return
     end

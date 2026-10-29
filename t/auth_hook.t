@@ -833,3 +833,61 @@ caller pool during connect: nil
 pool has the node: true
 --- no_error_log
 [error]
+
+=== TEST 23: a connection from another credential generation is not pooled
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookPoolGeneration",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "kong",
+            }
+
+            local resty_redis = require "resty.redis"
+            local connect = resty_redis.connect
+            local used_pool
+            local flipped = false
+            resty_redis.connect = function(self, host, port, opts)
+                if not flipped then
+                    flipped = true
+                    used_pool = opts.pool
+                    -- Another coroutine refreshed the credentials while this connection
+                    -- was waiting on the network.
+                    config.base_pool = config.base_pool .. "-new"
+                end
+                return connect(self, host, port, opts)
+            end
+
+            local redis = require "resty.rediscluster"
+            local ok, err = pcall(function()
+                local red = assert(redis:new(config))
+                assert(red:set("generation-key", "value"))
+            end)
+
+            -- Restore the module function before the assertions.
+            resty_redis.connect = connect
+
+            if not ok then
+                ngx.say("failed: ", err)
+                return
+            end
+
+            -- The connection that used the old pool name must be closed.
+            local probe = resty_redis:new()
+            assert(probe:connect("127.0.0.1", 6371, { pool = used_pool }))
+            ngx.say("reused: ", tostring(probe:get_reused_times() > 0))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+reused: false
+--- no_error_log
+[error]
