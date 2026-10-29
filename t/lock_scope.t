@@ -24,6 +24,8 @@ __DATA__
 --- config
     location /t {
         content_by_lua '
+            -- White-box test: it pins the lock key contract. A cross-worker test needs
+            -- `worker_processes 2` and a slow hook; run it manually.
             local keys = {}
             local fake_lock = {
                 new = function()

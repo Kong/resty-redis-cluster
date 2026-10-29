@@ -69,3 +69,46 @@ error: failed on 1 master(s): 127.0.0.1:7002 WRONGPASS invalid username-password
 flushall nodes: 127.0.0.1:7001,127.0.0.1:7003
 --- no_error_log
 [error]
+
+=== TEST 2: every master runs the command
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "flushClusterOk",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+                password = "pw",
+            }))
+
+            local res, err = red:flushall()
+            ngx.say("result: ", tostring(res), " error: ", tostring(err))
+
+            local flushed = {}
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "flushall" then
+                    flushed[#flushed + 1] = e.node
+                end
+            end
+            table.sort(flushed)
+            ngx.say("flushall nodes: ", table.concat(flushed, ","))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result: true error: nil
+flushall nodes: 127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003
+--- no_error_log
+[error]
