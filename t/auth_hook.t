@@ -1072,3 +1072,48 @@ created: false
 error has WRONGPASS: true
 --- no_error_log
 auth_config_reconfigurer failed
+
+=== TEST 26: the library does not throttle the hook
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local calls = 0
+            local config = {
+                name = "hookNoThrottle",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                auth = "kong",
+                force_auth = true,
+                auth_config_reconfigurer = function(self, err)
+                    calls = calls + 1
+                    return false
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(config))
+
+            -- Rotate on the client only. The server still accepts "kong".
+            red.config.auth = "wrong-password"
+
+            local last_err
+            for i = 1, 3 do
+                local _, err = red:get("missing-key")
+                last_err = err
+            end
+
+            ngx.say("hook calls: ", calls)
+            ngx.say("last error has WRONGPASS: ", tostring(last_err ~= nil and tostring(last_err):find("WRONGPASS", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+hook calls: 3
+last error has WRONGPASS: true
+--- no_error_log
+[error]
