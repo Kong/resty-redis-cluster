@@ -206,17 +206,9 @@ end
 
 
 local function release_connection(red, config)
-    -- `resty.redis` returns a command function for any unknown field name, so read the
-    -- flag with rawget. Otherwise this branch always runs and no connection is pooled.
-    if rawget(red, "auth_credentials_changed") then
-        -- Do not pool this connection: it authenticated with a password that the caller
-        -- replaced, and another client with the old password could reuse it.
-        red:close()
-        return
-    end
-
-    -- A refresh in another coroutine can change the pool name while this connection
-    -- waits on the network. Do not pool a connection from the previous generation.
+    -- The pool name covers the credential, so it changes when the caller replaces one.
+    -- A refresh in another coroutine can change the name while this connection waits on
+    -- the network. Do not pool a connection from the previous generation.
     if rawget(red, "pool_base") ~= config.base_pool then
         red:close()
         return
@@ -603,13 +595,6 @@ local function check_auth_with_retry(self, redis_client)
         end
 
         ok, auth_err = check_auth(self, redis_client)
-
-        if ok and not user_pool then
-            -- The connection now holds credentials that differ from the pool name.
-            -- `release_connection` closes it. The flag also covers a failed refresh,
-            -- where the pool name keeps the old credentials.
-            redis_client.auth_credentials_changed = true
-        end
     end
 
     return ok, auth_err
