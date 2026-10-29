@@ -1190,24 +1190,26 @@ local function _do_cmd_master(self, cmd, key, ...)
         redis_client:set_timeouts(self.config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   self.config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   self.config.read_timeout or DEFAULT_READ_TIMEOUT)
+        local node = master.ip .. ":" .. tostring(master.port)
         local ok, err = connect_with_pool(redis_client, master.ip, master.port, self.config)
         if ok then
             local _, auth_err = check_auth_with_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
-                return nil, auth_err
-            end
+                err = auth_err
 
-            _, err = redis_client[cmd](redis_client, key, ...)
-            release_connection(redis_client, self.config)
+            else
+                _, err = redis_client[cmd](redis_client, key, ...)
+                release_connection(redis_client, self.config)
+            end
         end
         if err then
-            table_insert(errors, err)
+            table_insert(errors, node .. " " .. tostring(err))
         end
     end
 
     if #errors > 0 then
-        return nil, table_concat(errors, ";")
+        return nil, "failed on " .. #errors .. " master(s): " .. table_concat(errors, "; ")
     end
     return true, nil
 end

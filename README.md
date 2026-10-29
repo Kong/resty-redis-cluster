@@ -188,6 +188,10 @@ fails with `closed` on a connection that came from the pool is sent again once o
 connection. The command may have run before the connection closed, so the retry is
 at-least-once. Enable it only when a duplicate command is acceptable.
 
+`flushall` and `flushdb` run on every master. When a master fails, the command continues on the
+other masters and returns an error that lists the failed nodes. Both commands are idempotent, so a
+later call can finish the work.
+
 3. Use pipeline
 
 ```lua
