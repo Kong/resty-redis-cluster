@@ -21,11 +21,10 @@ install: all
 test: all
 	$(TEST_ENV) prove -r t
 
-# z-recover.t starts the 6.2 fixture itself, so it is not in this list.
-REDIS7_TESTS ?= t/auth_hook.t t/auth.t t/auth_rotation.t t/auth_pool_window.t \
-                t/redis7_with_host.t t/redirects.t t/closed.t t/cmd_master.t \
-                t/lock_scope.t t/sanity.t t/mock-redis-down.t \
-                t/version.t t/lock_timeout.t
+# z-recover.t starts the 6.2 fixture itself and clashes with the fixture of the
+# job, so the 7.2 jobs leave it out. Every other file runs there.
+REDIS7_SKIP  ?= t/z-recover.t
+REDIS7_TESTS ?= $(filter-out $(REDIS7_SKIP),$(wildcard t/*.t))
 
 test-redis7: all
 	$(TEST_ENV) prove $(REDIS7_TESTS)

@@ -10,7 +10,7 @@ networks:
 
 services:
   redis_1:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis_1
     volumes:
       - ./conf/redis_1.conf:/usr/local/etc/redis/redis.conf
@@ -29,7 +29,7 @@ services:
       - "no-new-privileges=true"
 
   redis_2:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis_2
     volumes:
       - ./conf/redis_2.conf:/usr/local/etc/redis/redis.conf
@@ -48,7 +48,7 @@ services:
       - "no-new-privileges=true"
 
   redis_3:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis_3
     volumes:
       - ./conf/redis_3.conf:/usr/local/etc/redis/redis.conf
@@ -67,7 +67,7 @@ services:
       - "no-new-privileges=true"
 
   redis_4:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis_4
     volumes:
       - ./conf/redis_4.conf:/usr/local/etc/redis/redis.conf
@@ -86,7 +86,7 @@ services:
       - "no-new-privileges=true"
 
   redis_5:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis_5
     volumes:
       - ./conf/redis_5.conf:/usr/local/etc/redis/redis.conf
@@ -105,7 +105,7 @@ services:
       - "no-new-privileges=true"
 
   redis_6:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis_6
     volumes:
       - ./conf/redis_6.conf:/usr/local/etc/redis/redis.conf
@@ -124,7 +124,7 @@ services:
       - "no-new-privileges=true"
 
   redis-cluster-init:
-    image: redis:7.2
+    image: redis:7.2.17
     container_name: redis-cluster-init
     restart: 'no'
     tty: true

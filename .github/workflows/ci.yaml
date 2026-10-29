@@ -50,8 +50,27 @@ jobs:
 
           - name: Set up Redis Cluster
             run: |
-              docker compose -f t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml up -d
-              sleep 30 # wait for redis cluster to be ready
+              COMPOSE=t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml
+              docker compose -f "$COMPOSE" up -d
+
+              if [ "${{ matrix.conf }}" = "auth" ]; then
+                REDIS_CLI="redis-cli -p 6371 --user kong --pass kong"
+              else
+                REDIS_CLI="redis-cli -p 6371"
+              fi
+
+              # The init container forms the cluster after the nodes start.
+              for _ in $(seq 1 60); do
+                if docker compose -f "$COMPOSE" exec -T redis_1 $REDIS_CLI cluster info 2>/dev/null | grep -q 'cluster_state:ok'; then
+                  exit 0
+                fi
+                sleep 2
+              done
+
+              echo "the cluster did not become ready"
+              docker compose -f "$COMPOSE" ps
+              docker compose -f "$COMPOSE" logs --tail 50
+              exit 1
 
           - name: Run tests
             run: |
