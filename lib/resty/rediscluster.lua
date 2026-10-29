@@ -158,9 +158,10 @@ end
 
 
 -- Connect to a node with the pool name for that node. Copy the caller options, because
--- `sock:connect` yields for a new connection: a shared table must not hold a runtime name.
+-- `sock:connect` yields for a new connection: another coroutine can read the caller
+-- table while this call waits.
 local function connect_with_pool(redis_client, ip, port, config)
-    local connect_opts = {}
+    local connect_opts = new_tab(0, 8)
     local opts = config.connect_opts
     if opts then
         for key, value in pairs(opts) do
