@@ -183,6 +183,11 @@ local config = {
 }
 ```
 
+`retry_on_closed_connection` is optional and off by default. When it is `true`, a command that
+fails with `closed` on a connection that came from the pool is sent again once on a new
+connection. The command may have run before the connection closed, so the retry is
+at-least-once. Enable it only when a duplicate command is acceptable.
+
 3. Use pipeline
 
 ```lua
