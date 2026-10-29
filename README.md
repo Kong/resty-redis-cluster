@@ -141,11 +141,22 @@ AUTH once on the same connection. Any other return value, including `false`, `ni
 keeps the original AUTH error. AUTH fails before the library sends a command, so no command runs
 twice.
 
-The function runs once for each rejected connection. Keep it fast, and throttle reads from the
-secret store. Do not put credentials in the error message; the library logs that message.
+The function runs once for each rejected connection. Do not put credentials in the error message;
+the library logs that message.
 
-The first call to `new()` and a slot refresh hold a lock while the function runs. Keep the function
-short; other callers wait for the lock.
+Keep the caller side in mind:
+
+- **Update both configurations.** `new()` copies `username` and `password` from the source
+  configuration. The hook must update that source and `self.config`. When it updates only
+  `self.config`, every new request fails AUTH once, calls the hook again, and does not pool the
+  connection.
+- **Keep the hook short.** The first `new()` and a slot refresh hold a lock while the hook runs.
+  Other callers wait for `lock_timeout`, which is 5 seconds by default.
+- **Throttle the reads.** The library does not rate-limit the hook. Add a cooldown, or the secret
+  store sees one read for each rejected connection.
+- **Do not send commands from the hook.** A command on the same instance can fail AUTH again, and
+  the hook runs again.
+- **Update `auth` when you set it.** `auth` wins over `username` and `password`.
 
 When the function updates the credentials, the library does not return that connection to the pool
 named after the previous password. The next connection uses the new name. The library changes
@@ -159,13 +170,14 @@ the isolation between credentials.
 local config = {
     -- ...
     auth_config_reconfigurer = function(self, err)
-        -- Read the current credentials from your store, then update the config.
+        -- Read the current credentials from your store, then update both places.
         local password = read_password()
         if not password then
             return false
         end
 
-        self.config.password = password
+        self.config.password = password   -- this client
+        config.password = password        -- the source that the next new() copies
         return true
     end,
 }
