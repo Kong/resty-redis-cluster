@@ -402,13 +402,7 @@ else
 end
 ```
 
-### Connection options
-
-`retry_on_closed_connection` is optional and off by default. When it is `true`, a single command
-that fails with `closed` on a connection that came from the pool is sent again once on a new
-connection. A pipeline commit and an AUTH check are not retried. The command may have run before
-the connection closed, so the retry is at-least-once. Enable it only when a duplicate command is
-acceptable.
+### Flush commands
 
 `flushall` and `flushdb` run on every master. When a master fails, the command continues on the
 other masters and returns an error that lists the failed nodes. Both commands are idempotent, so a
@@ -441,10 +435,9 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the full s
 2. Return normal connections to the pool. A connection that replaced its credentials is still closed instead.
 3. Include the `auth` value in the pool name. A configuration that uses the legacy `auth` option gets a new pool name after the upgrade, so its idle connections are not reused once. The `config.base_pool` value changes with it.
 4. Follow ASK and MOVED redirects for a single command, and for a pipeline that receives ASK.
-5. Add `retry_on_closed_connection` to retry a single command that fails with `closed` on a pooled connection. It is off by default and at-least-once.
-6. Run `flushall` and `flushdb` on every master and list the failed nodes in the error.
-7. Remove the pool name from the DEBUG log. The name contains a hash of the credential.
-8. Use one slot fetch lock for each worker. A slow auth hook in one worker no longer blocks the others.
+5. Run `flushall` and `flushdb` on every master and list the failed nodes in the error.
+6. Remove the pool name from the DEBUG log. The name contains a hash of the credential.
+7. Use one slot fetch lock for each worker. A slow auth hook in one worker no longer blocks the others.
 
 #### 1.6.1
 

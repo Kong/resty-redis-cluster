@@ -1007,7 +1007,6 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
 
     local magic_random_seed = generate_magic_seed(self)
     local loop_counter = config.max_redirection or DEFAULT_MAX_REDIRECTION
-    local retried_closed = false
 
     for k = 1, loop_counter do
         if k > 1 then
@@ -1052,12 +1051,6 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                 ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
                 if ok then break end
             end
-        end
-
-        local reused = false
-        if ok and config.retry_on_closed_connection then
-            local count = redis_client:get_reused_times()
-            reused = count ~= nil and count > 0
         end
 
         if ok then
@@ -1134,23 +1127,6 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     redis_client:close()
                     self:refresh_slots()
                     return nil, "Cannot executing command, cluster status is failed!"
-
-                elseif err == "closed"
-                   and reused
-                   and not retried_closed
-                   and config.retry_on_closed_connection then
-                    -- The server closed a pooled connection. Retry once on a new one.
-                    -- The command may have run before the close, so the caller opts in.
-                    retried_closed = true
-                    redis_client:close()
-
-                    if k == loop_counter then
-                        -- No attempt left for the retry. Report the original error.
-                        return nil, err
-                    end
-
-                    need_to_retry = true
-
                 else
                     --There might be node fail, we should also refresh slot cache
                     redis_client:close()
