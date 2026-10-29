@@ -50,8 +50,9 @@ local RIGHT_BRACKET = "}"
 local _M = {}
 local mt = { __index = _M }
 
--- Redis 7.x and Redis 6.x use different slots format
-local redis7_with_host
+-- Redis 7.x and Redis 6.x use different slots format. One entry for each cluster
+-- name, because one worker can hold clients for clusters of different versions.
+local redis7_with_host = {}
 
 local slot_cache = {}
 local master_nodes = {}
@@ -424,6 +425,9 @@ local function parse_slots(self, redis_client)
     -- this can differ from self.config.serv_list
     local servers = { serv_list = {} }
 
+    -- Set when a node report carries the IP next to the hostname.
+    local cluster_uses_ip = false
+
     for i = 1, #slots_data do
         -- Redis 6: { 0, 5460, { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }, { "172.26.0.25", 6379, "20d96bc4a640fd244699e29274b2c94962def80e" } }
         -- Redis 7: { 0, 5460, { "rc-node-1", 6379, "3a4f2814802ca25a5c92dfc167674802126557d3", { "ip", "172.26.0.11" } }, { "rc-node-5", 6379, "f14b2cf710613f517374aefe7b84d9f013102ebe", { "ip", "172.26.0.15" } } }
@@ -458,8 +462,9 @@ local function parse_slots(self, redis_client)
             if ip_tab and type(ip_tab) == "table" and next(ip_tab) then
                 server_ip = ip_tab[2]
             end
-            if server_ip and server_ip ~= server_hostname_or_ip then
-                redis7_with_host = true
+            local uses_ip = server_ip ~= nil and server_ip ~= server_hostname_or_ip
+            if uses_ip then
+                cluster_uses_ip = true
 
                 -- prioritize IP address over hostname as IP does not suffer from stale DNS cache
                 local ip_port = { ip = server_ip, port = server_port }
@@ -471,10 +476,6 @@ local function parse_slots(self, redis_client)
                 if j == 3 then
                     table_insert(master_list, ip_port)
                 end
-
-            else
-
-                redis7_with_host = false
             end
 
             local hostname_port = { ip = server_hostname_or_ip, port = server_port }
@@ -484,7 +485,7 @@ local function parse_slots(self, redis_client)
 
             -- master node is returned before slave nodes
             -- only insert this if not inserted above
-            if not redis7_with_host and j == 3 then
+            if not uses_ip and j == 3 then
                 table_insert(master_list, hostname_port)
             end
         end
@@ -507,6 +508,7 @@ local function parse_slots(self, redis_client)
     slot_cache[self.config.name .. "serv_list"] = servers
 
     master_nodes[self.config.name .. "master_list"] = master_list
+    redis7_with_host[self.config.name] = cluster_uses_ip
 
     ngx_log(NGX_DEBUG, "finished initializing slot cache")
     return true
@@ -883,7 +885,7 @@ local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index
         --   { slave_ip, slave_port }, { slave_host, slave_port },
         --   { slave_ip, slave_port }, { slave_host, slave_port },
         -- }
-        if redis7_with_host then
+        if redis7_with_host[self.config.name] then
             -- pick IP
             if ip_host_index == 1 and index % 2 == 0 then
                 index = index - 1
@@ -901,7 +903,7 @@ local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index
 
     -- only pick the master node (IP or hostname)
     else
-        if redis7_with_host then
+        if redis7_with_host[self.config.name] then
             index = ip_host_index
         else
             index = 1
@@ -1015,7 +1017,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             if ok then break end
         else
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
-            local tries = redis7_with_host and 2 or 1
+            local tries = redis7_with_host[self.config.name] and 2 or 1
             for i = 1, tries do
                 ip, port, slave, err = pick_node(self, serv_list, slot, magic_random_seed, i)
                 if err then
@@ -1293,7 +1295,7 @@ function _M.commit_pipeline(self)
         local redis_client
         local ok, errors = nil, {}
         -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
-        local tries = redis7_with_host and 2 or 1
+        local tries = redis7_with_host[self.config.name] and 2 or 1
         for i = 1, tries do
             local err
             ip, port, slave, err = pick_node(self, v.serv_list, nil, magic_random_seed, i)
