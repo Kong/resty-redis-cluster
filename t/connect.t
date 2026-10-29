@@ -209,4 +209,4 @@ GET /t
 set dog: OK
 --- log_level: debug
 --- error_log eval
-qr/set pool name: (127.0.0.1|172.20.0.3[1-6]):637[1-6]:nil:nil::default:28877ae869af57c757d1eb26e7cd1784f6aa6bd8dad8d996ee3665b87edcba22/
+qr/set pool name: (127.0.0.1|172.20.0.3[1-6]):637[1-6]:nil:nil::default:<credential>/
