@@ -14,12 +14,21 @@ jobs:
               include:
                 - version: 6.2.14
                   conf: no-auth
+                  auth: "no"
                 - version: 6.2.14
                   conf: auth
+                  auth: "yes"
                 - version: 7.2
                   conf: auth
+                  auth: "yes"
                 - version: 7.2
                   conf: no-auth
+                  auth: "no"
+                # A Redis 7 cluster that announces hostnames. The slot map then
+                # carries an IP next to each hostname.
+                - version: 7.2
+                  conf: hostname
+                  auth: "yes"
         runs-on: ubuntu-latest
 
         steps:
@@ -53,7 +62,7 @@ jobs:
               COMPOSE=t/redis_cluster/${{ matrix.version }}/${{ matrix.conf }}/docker-compose.yaml
               docker compose -f "$COMPOSE" up -d
 
-              if [ "${{ matrix.conf }}" = "auth" ]; then
+              if [ "${{ matrix.auth }}" = "yes" ]; then
                 REDIS_CLI="redis-cli -p 6371 --user kong --pass kong"
               else
                 REDIS_CLI="redis-cli -p 6371"
@@ -74,7 +83,7 @@ jobs:
 
           - name: Run tests
             run: |
-              export REDIS_AUTH=$([[ "${{ matrix.conf }}" == "auth" ]] && echo "yes" || echo "no")
+              export REDIS_AUTH=${{ matrix.auth }}
               if [ "${{ matrix.version }}" = "7.2" ]; then
                 # z-recover.t starts the 6.2 fixture itself. Run the other suites here.
                 make test-redis7
