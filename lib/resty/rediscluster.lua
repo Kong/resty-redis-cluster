@@ -1161,6 +1161,12 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     -- The command may have run before the close, so the caller opts in.
                     retried_closed = true
                     redis_client:close()
+
+                    if k == loop_counter then
+                        -- No attempt left for the retry. Report the original error.
+                        return nil, err
+                    end
+
                     need_to_retry = true
 
                 else

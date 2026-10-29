@@ -164,3 +164,53 @@ result: nil err: closed
 gets: 1
 --- no_error_log
 [error]
+
+=== TEST 4: the retry does not hide the error when no attempt is left
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.reused = true
+            fake.connect = function(self)
+                self._reused = fake.reused and 1 or 0
+                return 1
+            end
+
+            local gets = 0
+            fake.handler = function(self, cmd)
+                if cmd == "get" then
+                    gets = gets + 1
+                    if gets == 1 then
+                        return false, "closed"
+                    end
+                    return "v"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "closedClusterOne",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+                max_redirection = 1,
+                retry_on_closed_connection = true,
+            }))
+
+            local res, err = red:get("k")
+            ngx.say("result: ", tostring(res), " err: ", tostring(err))
+            ngx.say("gets: ", gets)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result: nil err: closed
+gets: 1
+--- no_error_log
+[error]
