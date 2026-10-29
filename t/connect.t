@@ -26,6 +26,10 @@ run_tests();
 
 __DATA__
 
+# TEST 1 and TEST 2 open many connections at once. A request waits up to five
+# seconds on the slot lock, so it takes about six seconds. Keep the client
+# timeout well above that.
+
 === TEST 1: concurrent connections exceed the backlog limit(with auth)
 --- http_config eval: $::HttpConfig
 --- config
@@ -85,7 +89,7 @@ GET /t
 qr/failed to connect, err: [1-9][0-9.:]+ too many waiting connect operations/
 --- error_log
 failed to acquire the lock in refreshing slot cache: timeout
---- timeout: 5s
+--- timeout: 60s
 
 
 
@@ -156,7 +160,7 @@ GET /t
 [qr/failed to connect, err: [1-9][0-9.:]+ timeout/, qr/\d res = OK/]
 --- error_log eval
 qr/lua tcp socket queued connect timed out/
---- timeout: 10s
+--- timeout: 60s
 --- wait: 1
 
 
