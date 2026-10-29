@@ -182,7 +182,12 @@ local function connect_with_pool(redis_client, ip, port, config)
     end
 
     connect_opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
-    ngx_log(NGX_DEBUG, "set pool name: ", mask_pool_name(connect_opts.pool))
+
+    local log_pool = connect_opts.pool
+    if not (config.connect_opts and type(config.connect_opts.pool) == "string") then
+        log_pool = mask_pool_name(log_pool)
+    end
+    ngx_log(NGX_DEBUG, "set pool name: ", log_pool)
 
     -- Remember which credentials produced this pool name. The credentials can change
     -- while `connect` waits on the network.
