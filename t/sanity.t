@@ -1061,3 +1061,72 @@ parsed_key: {bar
 parsed_key: bar
 --- no_error_log
 [error]
+
+=== TEST 16: non-string credential fields do not stop new()
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "nullFields",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = ngx.null,
+                password = ngx.null,
+                connect_opts = {
+                    server_name = ngx.null,
+                },
+            }
+
+            local redis = require "resty.rediscluster"
+            local ok, res = pcall(redis.new, redis, config)
+            ngx.say("raised: ", tostring(not ok))
+            ngx.say("created: ", tostring(ok and res ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+raised: false
+created: true
+--- no_error_log
+[error]
+
+=== TEST 17: a server without a password rejects AUTH
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local calls = 0
+            local config = {
+                name = "noPasswordCluster",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                auth = "kong",
+                auth_config_reconfigurer = function(self, err)
+                    calls = calls + 1
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say("created: ", tostring(red ~= nil))
+            ngx.say("hook calls: ", calls)
+            ngx.say("error has AUTH: ", tostring(err ~= nil and tostring(err):find("AUTH", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+created: false
+hook calls: 1
+error has AUTH: true
+--- error_log
+failed to fetch slots: ERR AUTH <password> called without any password configured

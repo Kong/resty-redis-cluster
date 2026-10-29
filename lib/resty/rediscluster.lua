@@ -50,8 +50,9 @@ local RIGHT_BRACKET = "}"
 local _M = {}
 local mt = { __index = _M }
 
--- Redis 7.x and Redis 6.x use different slots format
-local redis7_with_host
+-- Redis 7.x and Redis 6.x use different slots format. One entry for each cluster
+-- name, because one worker can hold clients for clusters of different versions.
+local redis7_with_host = {}
 
 local slot_cache = {}
 local master_nodes = {}
@@ -116,17 +117,27 @@ local function set_base_pool_name(conf)
     base_pool = opts.pool
 
   else
-    local hashed_password, err = hash_password(conf.password)
-    if not hashed_password then
-      ngx_log(NGX_ERR, "failed to hash the password: ", err)
+    -- `check_auth` sends a field only when it is a string. A `nil` or an `ngx.null`
+    -- password must not reach the hash, and a non-string field must not be concatenated.
+    local auth = type(conf.auth) == "string" and conf.auth or nil
+    local password = type(conf.password) == "string" and conf.password or nil
+    local username = type(conf.username) == "string" and conf.username or nil
+    local server_name = type(opts.server_name) == "string" and opts.server_name or nil
+
+    local uses_auth = auth ~= nil
+    local secret = uses_auth and auth or password
+
+    local hashed_secret, err = hash_password(secret)
+    if not hashed_secret then
+      ngx_log(NGX_ERR, "failed to hash the credential: ", err)
       return nil, err
     end
 
     base_pool = tostring(opts.ssl)
                 .. ":" .. tostring(opts.ssl_verify)
-                .. ":" .. (opts.server_name or "")
-                .. ":" .. (conf.username or "")
-                .. ":" .. (hashed_password or "")
+                .. ":" .. (server_name or "")
+                .. ":" .. (uses_auth and "" or (username or ""))
+                .. ":" .. hashed_secret
 
   end
   conf.base_pool = base_pool
@@ -135,11 +146,37 @@ local function set_base_pool_name(conf)
 end
 
 
-local function set_poolname(ip, port, config)
-  -- concat the ip and port of the node to the base pool name
-  local pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
-  config.connect_opts.pool = pool
-  ngx_log(NGX_DEBUG, "set pool name: ", pool)
+-- Rebuild the pool name from the current credentials. The caller owns the name when it
+-- sets `connect_opts.pool`, so leave that name alone.
+local function refresh_base_pool_name(conf, user_pool)
+    if user_pool then
+        return true
+    end
+
+    return set_base_pool_name(conf)
+end
+
+
+-- Connect to a node with the pool name for that node. Copy the caller options, because
+-- `sock:connect` yields for a new connection: another coroutine can read the caller
+-- table while this call waits.
+local function connect_with_pool(redis_client, ip, port, config)
+    local connect_opts = new_tab(0, 8)
+    local opts = config.connect_opts
+    if opts then
+        for key, value in pairs(opts) do
+            connect_opts[key] = value
+        end
+    end
+
+    connect_opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
+    ngx_log(NGX_DEBUG, "set pool name: ", connect_opts.pool)
+
+    -- Remember which credentials produced this pool name. The credentials can change
+    -- while `connect` waits on the network.
+    redis_client.pool_base = config.base_pool
+
+    return redis_client:connect(ip, port, connect_opts)
 end
 
 
@@ -170,6 +207,22 @@ end
 
 
 local function release_connection(red, config)
+    -- `resty.redis` returns a command function for any unknown field name, so read the
+    -- flag with rawget. Otherwise this branch always runs and no connection is pooled.
+    if rawget(red, "auth_credentials_changed") then
+        -- Do not pool this connection: it authenticated with a password that the caller
+        -- replaced, and another client with the old password could reuse it.
+        red:close()
+        return
+    end
+
+    -- A refresh in another coroutine can change the pool name while this connection
+    -- waits on the network. Do not pool a connection from the previous generation.
+    if rawget(red, "pool_base") ~= config.base_pool then
+        red:close()
+        return
+    end
+
     local ok,err = red:set_keepalive(config.keepalive_timeout
             or DEFAULT_KEEPALIVE_TIMEOUT, config.keepalive_cons or DEFAULT_KEEPALIVE_CONS)
     if not ok then
@@ -383,6 +436,9 @@ local function parse_slots(self, redis_client)
     -- this can differ from self.config.serv_list
     local servers = { serv_list = {} }
 
+    -- Set when a node report carries the IP next to the hostname.
+    local cluster_uses_ip = false
+
     for i = 1, #slots_data do
         -- Redis 6: { 0, 5460, { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }, { "172.26.0.25", 6379, "20d96bc4a640fd244699e29274b2c94962def80e" } }
         -- Redis 7: { 0, 5460, { "rc-node-1", 6379, "3a4f2814802ca25a5c92dfc167674802126557d3", { "ip", "172.26.0.11" } }, { "rc-node-5", 6379, "f14b2cf710613f517374aefe7b84d9f013102ebe", { "ip", "172.26.0.15" } } }
@@ -417,8 +473,9 @@ local function parse_slots(self, redis_client)
             if ip_tab and type(ip_tab) == "table" and next(ip_tab) then
                 server_ip = ip_tab[2]
             end
-            if server_ip and server_ip ~= server_hostname_or_ip then
-                redis7_with_host = true
+            local uses_ip = server_ip ~= nil and server_ip ~= server_hostname_or_ip
+            if uses_ip then
+                cluster_uses_ip = true
 
                 -- prioritize IP address over hostname as IP does not suffer from stale DNS cache
                 local ip_port = { ip = server_ip, port = server_port }
@@ -430,10 +487,6 @@ local function parse_slots(self, redis_client)
                 if j == 3 then
                     table_insert(master_list, ip_port)
                 end
-
-            else
-
-                redis7_with_host = false
             end
 
             local hostname_port = { ip = server_hostname_or_ip, port = server_port }
@@ -443,7 +496,7 @@ local function parse_slots(self, redis_client)
 
             -- master node is returned before slave nodes
             -- only insert this if not inserted above
-            if not redis7_with_host and j == 3 then
+            if not uses_ip and j == 3 then
                 table_insert(master_list, hostname_port)
             end
         end
@@ -466,9 +519,101 @@ local function parse_slots(self, redis_client)
     slot_cache[self.config.name .. "serv_list"] = servers
 
     master_nodes[self.config.name .. "master_list"] = master_list
+    redis7_with_host[self.config.name] = cluster_uses_ip
 
     ngx_log(NGX_DEBUG, "finished initializing slot cache")
     return true
+end
+
+
+-- Redis texts that mean the server rejected the credentials. A dead connection or a
+-- socket error does not match: a new secret cannot fix those.
+local AUTH_REJECTED_MARKERS = {
+    "WRONGPASS",                    -- Redis 6 and later
+    "invalid username-password",    -- the WRONGPASS text on some compatible servers
+    "invalid password",             -- Redis 5 and earlier: "ERR invalid password"
+    "NOAUTH",                       -- a command reply; kept for future command-level checks
+    -- The server removed the password. The caller may clear its credential.
+    "called without any password configured",
+    "Client sent AUTH, but no password is set",
+}
+
+
+local function is_auth_rejected(err)
+    if type(err) ~= "string" then
+        return false
+    end
+
+    for i = 1, #AUTH_REJECTED_MARKERS do
+        if string_find(err, AUTH_REJECTED_MARKERS[i], 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+
+-- `ngx.log` rejects a table without `__tostring`, a function and a thread. A hook can
+-- raise those, and the log call must not raise a second error.
+local function to_string(value)
+    local ok, str = pcall(tostring, value)
+    if ok then
+        return str
+    end
+
+    return "unknown error"
+end
+
+
+-- Repeat AUTH once when the caller can change the credentials:
+-- `config.auth_config_reconfigurer(self, err)` returns `true` after it updated `self.config`.
+-- AUTH fails before the library sends a command to this node, so no command runs twice.
+-- An error in the function must not stop the request, so the library logs it and reports the
+-- original AUTH error.
+local function check_auth_with_retry(self, redis_client)
+    local ok, auth_err = check_auth(self, redis_client)
+    if not auth_err then
+        return ok, auth_err
+    end
+
+    local reconfigure = self.config.auth_config_reconfigurer
+    if type(reconfigure) ~= "function" or not is_auth_rejected(auth_err) then
+        return ok, auth_err
+    end
+
+    -- Read the caller pool name before the hook runs: the hook may change the config.
+    -- `set_base_pool_name` treats only a string as a caller pool name.
+    local pool = self.config.connect_opts and self.config.connect_opts.pool
+    local user_pool = type(pool) == "string" and pool or nil
+
+    local called, retry = pcall(reconfigure, self, auth_err)
+    if not called then
+        ngx_log(NGX_ERR, "auth_config_reconfigurer failed: ", to_string(retry))
+        return ok, auth_err
+    end
+
+    if retry == true then
+        if not user_pool then
+            -- Move the pool name before the retry: another coroutine can connect while
+            -- the retry waits on the network.
+            local refreshed, refresh_err = refresh_base_pool_name(self.config, user_pool)
+            if not refreshed then
+                ngx_log(NGX_ERR, "failed to refresh the pool name: ", refresh_err)
+            end
+        end
+
+        ok, auth_err = check_auth(self, redis_client)
+
+        if ok and not user_pool then
+            -- The connection now holds credentials that differ from the pool name.
+            -- `release_connection` closes it. The flag also covers a failed refresh,
+            -- where the pool name keeps the old credentials.
+            redis_client.auth_credentials_changed = true
+        end
+    end
+
+    return ok, auth_err
 end
 
 
@@ -493,8 +638,7 @@ local function try_hosts_slots(self, serv_list)
         -- Kong currently does not configure 'max_connection_attempts'
         for k = 1, config.max_connection_attempts or DEFAULT_MAX_CONNECTION_ATTEMPTS do
             -- for each ip:port pair, we try at least once before check total timeout
-            set_poolname(ip, port, self.config)
-            ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+            ok, err = connect_with_pool(redis_client, ip, port, self.config)
             if ok then break end
             ngx_log(NGX_ERR, "unable to connect ip:port ", ip, ":", port, ", attempt ", k, ", error: ", err)
             table_insert(errors, err)
@@ -510,7 +654,7 @@ local function try_hosts_slots(self, serv_list)
         end
 
         if ok then
-            local _, auth_err = check_auth(self, redis_client)
+            local _, auth_err = check_auth_with_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
                 table_insert(errors, auth_err)
@@ -764,7 +908,7 @@ local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index
         --   { slave_ip, slave_port }, { slave_host, slave_port },
         --   { slave_ip, slave_port }, { slave_host, slave_port },
         -- }
-        if redis7_with_host then
+        if redis7_with_host[self.config.name] then
             -- pick IP
             if ip_host_index == 1 and index % 2 == 0 then
                 index = index - 1
@@ -782,7 +926,7 @@ local function pick_node(self, serv_list, slot, magic_random_seed, ip_host_index
 
     -- only pick the master node (IP or hostname)
     else
-        if redis7_with_host then
+        if redis7_with_host[self.config.name] then
             index = ip_host_index
         else
             index = 1
@@ -892,12 +1036,11 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
             -- asking redirection should only happens at master nodes
             ip, port, slave = target_ip, target_port, false
 
-            set_poolname(ip, port, self.config)
-            ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+            ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
             if ok then break end
         else
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
-            local tries = redis7_with_host and 2 or 1
+            local tries = redis7_with_host[self.config.name] and 2 or 1
             for i = 1, tries do
                 ip, port, slave, err = pick_node(self, serv_list, slot, magic_random_seed, i)
                 if err then
@@ -906,14 +1049,13 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     return nil, err
                 end
 
-                set_poolname(ip, port, self.config)
-                ok, connerr = redis_client:connect(ip, port, self.config.connect_opts)
+                ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
                 if ok then break end
             end
         end
 
         if ok then
-            local _, auth_err = check_auth(self, redis_client)
+            local _, auth_err = check_auth_with_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
                 return nil, auth_err
@@ -1019,10 +1161,9 @@ local function _do_cmd_master(self, cmd, key, ...)
         redis_client:set_timeouts(self.config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                   self.config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                   self.config.read_timeout or DEFAULT_READ_TIMEOUT)
-        set_poolname(master.ip, master.port, self.config)
-        local ok, err = redis_client:connect(master.ip, master.port, self.config.connect_opts)
+        local ok, err = connect_with_pool(redis_client, master.ip, master.port, self.config)
         if ok then
-            local _, auth_err = check_auth(self, redis_client)
+            local _, auth_err = check_auth_with_retry(self, redis_client)
             if auth_err then
                 redis_client:close()
                 return nil, auth_err
@@ -1177,7 +1318,7 @@ function _M.commit_pipeline(self)
         local redis_client
         local ok, errors = nil, {}
         -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
-        local tries = redis7_with_host and 2 or 1
+        local tries = redis7_with_host[self.config.name] and 2 or 1
         for i = 1, tries do
             local err
             ip, port, slave, err = pick_node(self, v.serv_list, nil, magic_random_seed, i)
@@ -1191,8 +1332,7 @@ function _M.commit_pipeline(self)
             redis_client:set_timeouts(config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
                                       config.send_timeout or DEFAULT_SEND_TIMEOUT,
                                       config.read_timeout or DEFAULT_READ_TIMEOUT)
-            set_poolname(ip, port, self.config)
-            ok, err = redis_client:connect(ip, port, self.config.connect_opts)
+            ok, err = connect_with_pool(redis_client, ip, port, self.config)
             if ok then break end
             table_insert(errors, ip .. ":" .. port .. " " .. err)
         end
@@ -1201,7 +1341,7 @@ function _M.commit_pipeline(self)
             return nil, "failed to connect, err: " .. table_concat(errors, ",")
         end
 
-        local _, auth_err = check_auth(self, redis_client)
+        local _, auth_err = check_auth_with_retry(self, redis_client)
         if auth_err then
             redis_client:close()
             return nil, auth_err
