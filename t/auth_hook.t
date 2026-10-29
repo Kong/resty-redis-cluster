@@ -998,3 +998,46 @@ C created: no
 C error has WRONGPASS: true
 --- error_log
 failed to fetch slots: WRONGPASS
+
+=== TEST 24: a non-string pool name is not a caller pool
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local old_base
+
+            local config = {
+                name = "hookNullPool",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "wrong-password",
+                -- Not a string: the library must compute the pool name itself.
+                connect_opts = { pool = ngx.null },
+                auth_config_reconfigurer = function(self, err)
+                    old_base = self.config.base_pool
+                    self.config.password = "kong"
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            if not red then
+                ngx.say("failed: ", err)
+                return
+            end
+            assert(red:set("null-pool-key", "value"))
+
+            ngx.say("base pool changed: ", tostring(old_base ~= nil and config.base_pool ~= old_base))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+base pool changed: true
+--- no_error_log
+[error]

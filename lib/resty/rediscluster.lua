@@ -578,7 +578,9 @@ local function check_auth_with_retry(self, redis_client)
     end
 
     -- Read the caller pool name before the hook runs: the hook may change the config.
-    local user_pool = self.config.connect_opts and self.config.connect_opts.pool
+    -- `set_base_pool_name` treats only a string as a caller pool name.
+    local pool = self.config.connect_opts and self.config.connect_opts.pool
+    local user_pool = type(pool) == "string" and pool or nil
 
     local called, retry = pcall(reconfigure, self, auth_err)
     if not called then
