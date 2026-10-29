@@ -137,8 +137,8 @@ end
 
 -- Rebuild the pool name from the current credentials. The caller owns the name when it
 -- sets `connect_opts.pool`, so leave that name alone.
-local function refresh_base_pool_name(conf)
-    if conf.connect_opts and conf.connect_opts.pool then
+local function refresh_base_pool_name(conf, user_pool)
+    if user_pool then
         return true
     end
 
@@ -146,30 +146,21 @@ local function refresh_base_pool_name(conf)
 end
 
 
--- Connect to a node with the pool name for that node. `sock:connect` reads the pool
--- name when the call starts, so restore `connect_opts.pool` right after it returns. The
--- caller's table keeps the value that it gave us (or nil).
+-- Connect to a node with the pool name for that node. Copy the caller options, because
+-- `sock:connect` yields for a new connection: a shared table must not hold a runtime name.
 local function connect_with_pool(redis_client, ip, port, config)
+    local connect_opts = {}
     local opts = config.connect_opts
-    if not opts then
-        opts = {}
-        config.connect_opts = opts
+    if opts then
+        for key, value in pairs(opts) do
+            connect_opts[key] = value
+        end
     end
 
-    local previous = opts.pool
-    opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
-    ngx_log(NGX_DEBUG, "set pool name: ", opts.pool)
+    connect_opts.pool = (ip or "") .. ":" .. tostring(port or "") .. ":" .. config.base_pool
+    ngx_log(NGX_DEBUG, "set pool name: ", connect_opts.pool)
 
-    -- Restore the value that the caller gave us even when `connect` raises. A shared table
-    -- must never keep a runtime pool name.
-    local finished, connected, err = pcall(redis_client.connect, redis_client, ip, port, opts)
-    opts.pool = previous
-
-    if not finished then
-        error(connected, 0)
-    end
-
-    return connected, err
+    return redis_client:connect(ip, port, connect_opts)
 end
 
 
@@ -563,6 +554,9 @@ local function check_auth_with_retry(self, redis_client)
         return ok, auth_err
     end
 
+    -- Read the caller pool name before the hook runs: the hook may change the config.
+    local user_pool = self.config.connect_opts and self.config.connect_opts.pool
+
     local called, retry = pcall(reconfigure, self, auth_err)
     if not called then
         ngx_log(NGX_ERR, "auth_config_reconfigurer failed: ", to_string(retry))
@@ -572,11 +566,11 @@ local function check_auth_with_retry(self, redis_client)
     if retry == true then
         ok, auth_err = check_auth(self, redis_client)
 
-        if ok and not (self.config.connect_opts and self.config.connect_opts.pool) then
+        if ok and not user_pool then
             -- The connection now holds credentials that differ from the pool name.
             redis_client.auth_credentials_changed = true
 
-            local refreshed, refresh_err = refresh_base_pool_name(self.config)
+            local refreshed, refresh_err = refresh_base_pool_name(self.config, user_pool)
             if not refreshed then
                 ngx_log(NGX_ERR, "failed to refresh the pool name: ", refresh_err)
             end

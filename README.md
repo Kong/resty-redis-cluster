@@ -149,7 +149,7 @@ short; other callers wait for the lock.
 
 When the function updates `password`, the library does not return that connection to the pool named
 after the previous password. The next connection uses the new name. The library changes
-`config.base_pool` only; it never changes the `connect_opts.pool` value that you set.
+`config.base_pool` only; it never changes the `connect_opts` table that you pass.
 
 With the legacy `auth` option, the pool name does not include the credential. When you set
 `connect_opts.pool`, you own the pool name and the isolation between credentials.
@@ -409,6 +409,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 #### Unreleased
 
 1. Add the `auth_config_reconfigurer` option. When Redis rejects AUTH, the library calls it and repeats AUTH once on the same connection after it updates the credentials.
+2. Return normal connections to the pool. A connection that replaced its credentials is still closed instead.
 
 #### 1.6.1
 

@@ -775,3 +775,61 @@ base pool is stable: true
 base pool has no address: true
 --- no_error_log
 [error]
+
+=== TEST 20: the library passes a copy of the connect options
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookCopyOptions",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                username = "default",
+                password = "kong",
+            }
+
+            local resty_redis = require "resty.redis"
+            local connect = resty_redis.connect
+            local seen
+            resty_redis.connect = function(self, host, port, opts)
+                seen = seen or {
+                    same_table = opts == config.connect_opts,
+                    caller_pool = config.connect_opts and config.connect_opts.pool,
+                    pool = opts and opts.pool,
+                    host = host,
+                    port = port,
+                }
+                return connect(self, host, port, opts)
+            end
+
+            local redis = require "resty.rediscluster"
+            local ok, err = pcall(function()
+                local red = assert(redis:new(config))
+                assert(red:set("pool-key", "value"))
+            end)
+
+            -- Restore the module function before the assertions.
+            resty_redis.connect = connect
+
+            if not ok then
+                ngx.say("failed: ", err)
+                return
+            end
+
+            ngx.say("same table: ", tostring(seen.same_table))
+            ngx.say("caller pool during connect: ", tostring(seen.caller_pool))
+            ngx.say("pool has the node: ", tostring(seen.pool == seen.host .. ":" .. seen.port .. ":" .. config.base_pool))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+same table: false
+caller pool during connect: nil
+pool has the node: true
+--- no_error_log
+[error]
