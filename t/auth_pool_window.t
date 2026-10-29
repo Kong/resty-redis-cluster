@@ -26,13 +26,17 @@ __DATA__
         content_by_lua '
             local config
             local base_at_retry
+            local bases = {}
             local CRLF = string.char(13, 10)
 
             local fake_redis = {
                 new = function()
                     return {
                         set_timeouts = function() end,
-                        connect = function() return 1 end,
+                        connect = function()
+                            bases[#bases + 1] = config.base_pool
+                            return 1
+                        end,
                         get_reused_times = function() return 0 end,
                         info = function() return "redis_version:6.2.14" .. CRLF end,
                         cluster = function(self, sub)
@@ -76,7 +80,8 @@ __DATA__
                 ngx.say("failed: ", err)
                 return
             end
-
+            -- The pool name must move to the new credential before the AUTH retry.
+            ngx.say("the first connection used the old pool: ", tostring(bases[1] ~= config.base_pool))
             ngx.say("base at retry equals final: ", tostring(base_at_retry == config.base_pool))
             ngx.say("base has a credential: ", tostring(config.base_pool:find("^nil:nil:::[0-9a-f]+$") ~= nil))
         ';
@@ -84,6 +89,7 @@ __DATA__
 --- request
 GET /t
 --- response_body
+the first connection used the old pool: true
 base at retry equals final: true
 base has a credential: true
 --- no_error_log
