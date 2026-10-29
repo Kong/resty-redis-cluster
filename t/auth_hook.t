@@ -1042,7 +1042,7 @@ base pool changed: true
 --- no_error_log
 [error]
 
-=== TEST 25: a hook that is not a function is ignored
+=== TEST 25: a hook that is not a function is rejected
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -1062,16 +1062,16 @@ base pool changed: true
             local redis = require "resty.rediscluster"
             local red, err = redis:new(config)
             ngx.say("created: ", tostring(red ~= nil))
-            ngx.say("error has WRONGPASS: ", tostring(err ~= nil and tostring(err):find("WRONGPASS", 1, true) ~= nil))
+            ngx.say("error: ", tostring(err))
         ';
     }
 --- request
 GET /t
 --- response_body
 created: false
-error has WRONGPASS: true
+error: auth_config_reconfigurer must be a function
 --- no_error_log
-auth_config_reconfigurer failed
+[error]
 
 === TEST 26: the library does not throttle the hook
 --- http_config eval: $::HttpConfig
@@ -1115,5 +1115,30 @@ GET /t
 --- response_body
 hook calls: 3
 last error has WRONGPASS: true
+--- no_error_log
+[error]
+
+=== TEST 27: ngx.null is the same as no hook
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local redis = require "resty.rediscluster"
+
+            local conf = {
+                name = "nullHook",
+                serv_list = {},
+                auth_config_reconfigurer = ngx.null,
+            }
+            local red, err = redis:new(conf)
+            ngx.say("created: ", tostring(red ~= nil))
+            ngx.say("error: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+created: false
+error:  redis cluster config serv_list is empty
 --- no_error_log
 [error]

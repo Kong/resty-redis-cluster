@@ -845,6 +845,12 @@ function _M.new(_, config)
     if not config.name then
         return nil, " redis cluster config name is empty"
     end
+    -- A hook that is not a function never fires, so the caller gets no clue.
+    local reconfigurer = config.auth_config_reconfigurer
+    if reconfigurer ~= nil and reconfigurer ~= ngx.null
+       and type(reconfigurer) ~= "function" then
+        return nil, "auth_config_reconfigurer must be a function"
+    end
     if not config.serv_list or #config.serv_list < 1 then
         return nil, " redis cluster config serv_list is empty"
     end
