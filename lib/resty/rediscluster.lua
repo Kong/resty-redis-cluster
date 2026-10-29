@@ -528,9 +528,13 @@ end
 -- Redis texts that mean the server rejected the credentials. A dead connection or a
 -- socket error does not match: a new secret cannot fix those.
 local AUTH_REJECTED_MARKERS = {
-    "WRONGPASS",          -- Redis 6 and later
-    "invalid password",   -- Redis 5 and earlier: "ERR invalid password"
-    "NOAUTH",             -- kept for future call paths
+    "WRONGPASS",                    -- Redis 6 and later
+    "invalid username-password",    -- the WRONGPASS text on some compatible servers
+    "invalid password",             -- Redis 5 and earlier: "ERR invalid password"
+    "NOAUTH",                       -- kept for future command-level checks
+    -- The server removed the password. The caller may clear its credential.
+    "called without any password configured",
+    "Client sent AUTH, but no password is set",
 }
 
 

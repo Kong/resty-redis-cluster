@@ -1094,3 +1094,39 @@ raised: false
 created: true
 --- no_error_log
 [error]
+
+=== TEST 17: a server without a password rejects AUTH
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local calls = 0
+            local config = {
+                name = "noPasswordCluster",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                auth = "kong",
+                auth_config_reconfigurer = function(self, err)
+                    calls = calls + 1
+                    return true
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say("created: ", tostring(red ~= nil))
+            ngx.say("hook calls: ", calls)
+            ngx.say("error has AUTH: ", tostring(err ~= nil and tostring(err):find("AUTH", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+created: false
+hook calls: 1
+error has AUTH: true
+--- error_log
+failed to fetch slots: ERR AUTH <password> called without any password configured
