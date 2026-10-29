@@ -573,7 +573,7 @@ local function check_auth_with_retry(self, redis_client)
     end
 
     local reconfigure = self.config.auth_config_reconfigurer
-    if not reconfigure or not is_auth_rejected(auth_err) then
+    if type(reconfigure) ~= "function" or not is_auth_rejected(auth_err) then
         return ok, auth_err
     end
 

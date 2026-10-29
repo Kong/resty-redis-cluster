@@ -1041,3 +1041,34 @@ GET /t
 base pool changed: true
 --- no_error_log
 [error]
+
+=== TEST 25: a hook that is not a function is ignored
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local config = {
+                name = "hookNotFunction",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                auth = "wrong-password",
+                force_auth = true,
+                auth_config_reconfigurer = true,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red, err = redis:new(config)
+            ngx.say("created: ", tostring(red ~= nil))
+            ngx.say("error has WRONGPASS: ", tostring(err ~= nil and tostring(err):find("WRONGPASS", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+created: false
+error has WRONGPASS: true
+--- no_error_log
+auth_config_reconfigurer failed
