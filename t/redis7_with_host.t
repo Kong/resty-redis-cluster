@@ -68,6 +68,7 @@ __DATA__
                 end,
             }
 
+            local previous_redis = package.loaded["resty.redis"]
             package.loaded["resty.redis"] = fake_redis
             local lib = require "resty.rediscluster"
 
@@ -88,6 +89,9 @@ __DATA__
             local b = assert(lib:new(cfg6))
 
             local v, err = b:get("k")
+
+            -- Restore the module table before the assertions.
+            package.loaded["resty.redis"] = previous_redis
 
             local tried_replica = false
             for i = 1, #connected do

@@ -129,7 +129,7 @@ local function set_base_pool_name(conf)
 
     local hashed_secret, err = hash_password(secret)
     if not hashed_secret then
-      ngx_log(NGX_ERR, "failed to hash the password: ", err)
+      ngx_log(NGX_ERR, "failed to hash the credential: ", err)
       return nil, err
     end
 

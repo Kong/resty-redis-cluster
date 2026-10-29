@@ -149,7 +149,7 @@ short; other callers wait for the lock.
 
 When the function updates the credentials, the library does not return that connection to the pool
 named after the previous password. The next connection uses the new name. The library changes
-`config.base_pool` only; it never changes the `connect_opts` table that you pass.
+`config.base_pool` only; it never changes the `connect_opts` values that you set.
 
 The pool name contains the secret that the library sends: `auth` for the legacy option, or
 `username` and `password` for Redis 6. When you set `connect_opts.pool`, you own the pool name and
@@ -401,7 +401,7 @@ end
 5. Limitation only for turn on enable slave read: If slave -> master link is down(maybe still under sync and recovery), resty-redis-cluster will not filter these nodes out. Thus, read from slave may return unexpected response. Suggest always catch the response parsing exception while enable slave read.
    This is because client depends on cluster slots command.
 
-6. An instance is not reentrant for pipelines. `init_pipeline()` stores the queue on the instance, and every command on that instance joins the queue until `commit_pipeline()` or `cancel_pipeline()`. Do not let two coroutines start a pipeline on the same instance. Simple commands are safe to run from several coroutines on one instance.
+6. An instance is not reentrant for pipelines. `init_pipeline()` stores the queue on the instance, and every command on that instance joins the queue until `commit_pipeline()` or `cancel_pipeline()`. Do not let two coroutines start a pipeline on the same instance. Simple commands are safe to run from several coroutines on one instance while no pipeline is active on it.
 
 ### Compatibilty
 
@@ -413,7 +413,7 @@ Currently, this library is fully tested with Redis `6.x` and `7.x`.
 
 1. Add the `auth_config_reconfigurer` option. When Redis rejects AUTH, the library calls it and repeats AUTH once on the same connection after it updates the credentials.
 2. Return normal connections to the pool. A connection that replaced its credentials is still closed instead.
-3. Include the `auth` value in the pool name. A configuration that uses the legacy `auth` option gets a new pool name after the upgrade, so its idle connections are not reused once.
+3. Include the `auth` value in the pool name. A configuration that uses the legacy `auth` option gets a new pool name after the upgrade, so its idle connections are not reused once. The `config.base_pool` value changes with it.
 
 #### 1.6.1
 

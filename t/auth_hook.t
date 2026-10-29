@@ -925,6 +925,7 @@ reused: false
 
             ngx.say("bad created: ", bad_instance and "yes" or "no")
             ngx.say("bad error has WRONGPASS: ", tostring(bad_err ~= nil and tostring(bad_err):find("WRONGPASS", 1, true) ~= nil))
+            ngx.say("bad pool is set: ", tostring(bad.base_pool ~= nil))
             ngx.say("good pool has a credential: ", tostring(good.config.base_pool:find("^nil:nil:::[0-9a-f]+$") ~= nil))
             ngx.say("pool names differ: ", tostring(good.config.base_pool ~= bad.base_pool))
         ';
@@ -934,6 +935,7 @@ GET /t
 --- response_body
 bad created: no
 bad error has WRONGPASS: true
+bad pool is set: true
 good pool has a credential: true
 pool names differ: true
 --- error_log
