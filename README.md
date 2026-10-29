@@ -152,7 +152,8 @@ Keep the caller side in mind:
   connection.
 - **Keep the hook short.** The first `new()` and a slot refresh hold a lock while the hook runs.
   Other requests in the same worker wait for `lock_timeout`, which is 5 seconds by default. Other
-  workers do not wait for the initial slot fetch.
+  workers do not wait for the initial slot fetch. Each worker fetches the slots once, so N workers
+  make N slot queries at cold start.
 - **Throttle the reads.** The library does not rate-limit the hook. Add a cooldown, or the secret
   store sees one read for each rejected connection.
 - **Do not send commands from the hook.** A command on the same instance can fail AUTH again, and
@@ -183,15 +184,6 @@ local config = {
     end,
 }
 ```
-
-`retry_on_closed_connection` is optional and off by default. When it is `true`, a command that
-fails with `closed` on a connection that came from the pool is sent again once on a new
-connection. The command may have run before the connection closed, so the retry is
-at-least-once. Enable it only when a duplicate command is acceptable.
-
-`flushall` and `flushdb` run on every master. When a master fails, the command continues on the
-other masters and returns an error that lists the failed nodes. Both commands are idempotent, so a
-later call can finish the work.
 
 3. Use pipeline
 
@@ -410,6 +402,18 @@ else
 end
 ```
 
+### Connection options
+
+`retry_on_closed_connection` is optional and off by default. When it is `true`, a single command
+that fails with `closed` on a connection that came from the pool is sent again once on a new
+connection. A pipeline commit and an AUTH check are not retried. The command may have run before
+the connection closed, so the retry is at-least-once. Enable it only when a duplicate command is
+acceptable.
+
+`flushall` and `flushdb` run on every master. When a master fails, the command continues on the
+other masters and returns an error that lists the failed nodes. Both commands are idempotent, so a
+later call can finish the work.
+
 ### Limitation
 
 1. Doesn't support MSET, MGET operations yet
@@ -427,7 +431,7 @@ end
 
 ### Compatibilty
 
-Currently, this library is fully tested with Redis `6.2` and `7.2`.
+Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the full suite on `6.2` and the auth and client suites on `7.2`.
 
 ### Changelog
 
@@ -436,6 +440,11 @@ Currently, this library is fully tested with Redis `6.2` and `7.2`.
 1. Add the `auth_config_reconfigurer` option. When Redis rejects AUTH, the library calls it and repeats AUTH once on the same connection after it updates the credentials.
 2. Return normal connections to the pool. A connection that replaced its credentials is still closed instead.
 3. Include the `auth` value in the pool name. A configuration that uses the legacy `auth` option gets a new pool name after the upgrade, so its idle connections are not reused once. The `config.base_pool` value changes with it.
+4. Follow ASK and MOVED redirects for a single command, and for a pipeline that receives ASK.
+5. Add `retry_on_closed_connection` to retry a single command that fails with `closed` on a pooled connection. It is off by default and at-least-once.
+6. Run `flushall` and `flushdb` on every master and list the failed nodes in the error.
+7. Mask the credential in the pool-name DEBUG log.
+8. Use one slot fetch lock for each worker. A slow auth hook in one worker no longer blocks the others.
 
 #### 1.6.1
 
