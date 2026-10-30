@@ -26,6 +26,9 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
   redis_2:
     image: redis:7.2.17
@@ -44,6 +47,9 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
   redis_3:
     image: redis:7.2.17
@@ -62,6 +68,9 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
   redis_4:
     image: redis:7.2.17
@@ -80,6 +89,9 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
   redis_5:
     image: redis:7.2.17
@@ -98,6 +110,9 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
   redis_6:
     image: redis:7.2.17
@@ -116,6 +131,9 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
   redis-cluster-init:
     image: redis:7.2.17
@@ -140,4 +158,7 @@ services:
           memory: 10M
     security_opt:
       - "no-new-privileges:true"
+    read_only: true
+    tmpfs:
+      - /data
 
