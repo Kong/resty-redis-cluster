@@ -25,7 +25,7 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
   redis_2:
     image: redis:7.2.17
@@ -43,7 +43,7 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
   redis_3:
     image: redis:7.2.17
@@ -61,7 +61,7 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
   redis_4:
     image: redis:7.2.17
@@ -79,7 +79,7 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
   redis_5:
     image: redis:7.2.17
@@ -97,7 +97,7 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
   redis_6:
     image: redis:7.2.17
@@ -115,7 +115,7 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
   redis-cluster-init:
     image: redis:7.2.17
@@ -139,5 +139,5 @@ services:
         limits:
           memory: 10M
     security_opt:
-      - "no-new-privileges=true"
+      - "no-new-privileges:true"
 
