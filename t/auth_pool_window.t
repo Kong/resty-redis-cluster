@@ -27,6 +27,7 @@ __DATA__
             local config
             local base_at_retry
             local bases = {}
+            local closed, pooled = 0, 0
             local CRLF = string.char(13, 10)
 
             local fake_redis = {
@@ -55,8 +56,13 @@ __DATA__
                             base_at_retry = config.base_pool
                             return "OK"
                         end,
-                        set_keepalive = function() return 1 end,
-                        close = function() end,
+                        set_keepalive = function()
+                            pooled = pooled + 1
+                            return 1
+                        end,
+                        close = function()
+                            closed = closed + 1
+                        end,
                         get = function() return "v" end,
                     }
                 end,
@@ -84,6 +90,9 @@ __DATA__
             ngx.say("the first connection used the old pool: ", tostring(bases[1] ~= config.base_pool))
             ngx.say("base at retry equals final: ", tostring(base_at_retry == config.base_pool))
             ngx.say("base has a credential: ", tostring(config.base_pool:find("^nil:nil:::[0-9a-f]+$") ~= nil))
+            -- The connection authenticated with the old credential and then replaced it.
+            -- It must not go back to the pool under the name it was taken from.
+            ngx.say("closed: ", closed, " pooled: ", pooled)
         ';
     }
 --- request
@@ -92,5 +101,6 @@ GET /t
 the first connection used the old pool: true
 base at retry equals final: true
 base has a credential: true
+closed: 1 pooled: 0
 --- no_error_log
 [error]
