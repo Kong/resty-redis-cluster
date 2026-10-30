@@ -1118,27 +1118,32 @@ last error has WRONGPASS: true
 --- no_error_log
 [error]
 
-=== TEST 27: ngx.null is the same as no hook
+=== TEST 27: ngx.null and false mean no hook
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
         content_by_lua '
             local redis = require "resty.rediscluster"
 
+            local expected = " redis cluster config serv_list is empty"
+
             local conf = {
-                name = "nullHook",
+                name = "absentHook",
                 serv_list = {},
                 auth_config_reconfigurer = ngx.null,
             }
-            local red, err = redis:new(conf)
-            ngx.say("created: ", tostring(red ~= nil))
-            ngx.say("error: ", tostring(err))
+            local _, err_null = redis:new(conf)
+            ngx.say("ngx.null means no hook: ", tostring(err_null == expected))
+
+            conf.auth_config_reconfigurer = false
+            local _, err_false = redis:new(conf)
+            ngx.say("false means no hook: ", tostring(err_false == expected))
         ';
     }
 --- request
 GET /t
 --- response_body
-created: false
-error:  redis cluster config serv_list is empty
+ngx.null means no hook: true
+false means no hook: true
 --- no_error_log
 [error]

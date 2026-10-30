@@ -839,7 +839,7 @@ function _M.new(_, config)
     end
     -- A hook that is not a function never fires, so the caller gets no clue.
     local reconfigurer = config.auth_config_reconfigurer
-    if reconfigurer ~= nil and reconfigurer ~= ngx.null
+    if reconfigurer ~= nil and reconfigurer ~= false and reconfigurer ~= ngx.null
        and type(reconfigurer) ~= "function" then
         return nil, "auth_config_reconfigurer must be a function"
     end

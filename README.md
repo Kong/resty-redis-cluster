@@ -141,6 +141,9 @@ AUTH once on the same connection. Any other return value, including `false`, `ni
 keeps the original AUTH error. AUTH fails before the library sends a command, so no command runs
 twice.
 
+To disable the hook, pass `nil`, `false` or `ngx.null`. Any other non-function value makes `new()`
+return an error.
+
 The function runs once for each rejected connection. Do not put credentials in the error message;
 the library logs that message.
 
