@@ -391,3 +391,124 @@ GET /t
 result: bar
 --- no_error_log
 [error]
+
+
+=== TEST 8: an ASK target that answers MOVED ends the request
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.topology = 1
+            -- 7003 marks slot 12182 MIGRATING to 7001, but 7001 is not IMPORTING it,
+            -- for example when a replica was promoted during the migration. So 7001
+            -- ignores ASKING and sends the client back to the owner, and the owner
+            -- answers ASK again. A second ASK must end the request.
+            local gets = 0
+            fake.handler = function(self, cmd)
+                if cmd == "asking" then
+                    return "OK"
+                end
+                if cmd == "get" then
+                    gets = gets + 1
+                    if gets > 20 then
+                        -- A loop would run for ever. Stop it early.
+                        return false, "ERR guard: still redirecting"
+                    end
+                    if self._node == "127.0.0.1:7003" then
+                        return false, "ASK 12182 127.0.0.1:7001"
+                    end
+                    return false, "MOVED 12182 127.0.0.1:7003"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "askMovedLoop",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:get("foo")
+            local refreshes = -1   -- the first CLUSTER SLOTS belongs to new()
+            local asking_nodes = {}
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cluster-slots" then
+                    refreshes = refreshes + 1
+                elseif e.ev == "cmd" and e.cmd == "asking" then
+                    asking_nodes[#asking_nodes + 1] = e.node
+                end
+            end
+            ngx.say("result is nil: ", tostring(res == nil))
+            ngx.say("nested asking: ", tostring(err ~= nil and err:find("nested asking", 1, true) ~= nil))
+            ngx.say("get sent: ", gets, " slot refreshes: ", refreshes)
+            ngx.say("asking sent to: ", table.concat(asking_nodes, ","))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result is nil: true
+nested asking: true
+get sent: 3 slot refreshes: 2
+asking sent to: 127.0.0.1:7001
+--- no_error_log
+[error]
+
+=== TEST 9: a pipeline ASK that comes back as MOVED ends the request
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.topology = 1
+            local gets = 0
+            fake.handler = function(self, cmd)
+                if cmd == "asking" then
+                    return "OK"
+                end
+                if cmd == "get" then
+                    gets = gets + 1
+                    if gets > 20 then
+                        return false, "ERR guard: still redirecting"
+                    end
+                    if self._node == "127.0.0.1:7003" then
+                        return false, "ASK 12182 127.0.0.1:7001"
+                    end
+                    return false, "MOVED 12182 127.0.0.1:7003"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "askMovedLoopPipe",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            red:init_pipeline()
+            red:get("foo")
+            local res, err = red:commit_pipeline()
+            ngx.say("result is nil: ", tostring(res == nil))
+            ngx.say("nested asking: ", tostring(err ~= nil and err:find("nested asking", 1, true) ~= nil))
+            ngx.say("get sent: ", gets)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result is nil: true
+nested asking: true
+get sent: 3
+--- no_error_log
+[error]
