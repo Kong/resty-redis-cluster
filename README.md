@@ -439,7 +439,7 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same s
 #### Unreleased
 
 1. Add the `auth_config_reconfigurer` option. When Redis rejects AUTH, the library calls it and repeats AUTH once on the same connection after it updates the credentials.
-2. Return normal connections to the pool. A connection that replaced its credentials is still closed instead.
+2. Return normal connections to the pool. A connection that replaced its credentials is closed instead. A caller pool name is the exception: when you set `connect_opts.pool`, you own the name and the isolation between credentials.
 3. Include the `auth` value in the pool name. A configuration that uses the legacy `auth` option gets a new pool name after the upgrade, so its idle connections are not reused once. The `config.base_pool` value changes with it.
 4. Follow ASK and MOVED redirects for a single command, and for a pipeline that receives ASK.
 5. Run `flushall` and `flushdb` on every master and list the failed nodes in the error.
