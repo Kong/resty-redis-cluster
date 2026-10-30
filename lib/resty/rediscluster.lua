@@ -1054,9 +1054,17 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
 
         if target_ip ~= nil and target_port ~= nil then
             -- asking redirection should only happens at master nodes
-            ip, port, slave = target_ip, target_port, false
+            slave = false
 
-            ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
+            -- A hostname cluster names the target with a hostname. The slot map holds
+            -- its IP, and the IP does not suffer from a stale DNS cache. Only the
+            -- connect falls back: the command is sent once.
+            local targets = ask_targets(self, target_ip, target_port)
+            for i = 1, #targets do
+                ip, port = targets[i].ip, targets[i].port
+                ok, connerr = connect_with_pool(redis_client, ip, port, self.config)
+                if ok then break end
+            end
         else
             -- Redis 7: try IP first and then hostname as IP does not suffer from stale DNS cache
             local tries = redis7_with_host[self.config.name] and 2 or 1
@@ -1114,6 +1122,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                     -- if retry with moved, we will not asking to specific ip:port anymore
                     target_ip = nil
                     target_port = nil
+                    asking = false
                     local _, _, moved_ip, moved_port = string_find(err, "MOVED %d+ ([%w%.%-_]+):(%d+)")
                     if moved_ip == ip and moved_port == tostring(port) then
                         ngx_log(NGX_DEBUG, "nested moved redirection detected, refreshing slots ...")
@@ -1135,24 +1144,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                         if ask_host ~= nil and ask_port ~= nil then
                             -- only put back to connection pool when there are no errors
                             release_connection(redis_client, config)
-
-                            -- Try the IP of the target first, then the address of the reply.
-                            local last_err
-                            local targets = ask_targets(self, ask_host, ask_port)
-                            for i = 1, #targets do
-                                local target = targets[i]
-                                local res, ask_err = handle_command_with_retry(self, target.ip,
-                                                                               target.port, true,
-                                                                               cmd, key, ...)
-                                if res ~= nil then
-                                    return res, ask_err
-                                end
-                                last_err = ask_err
-                            end
-
-                            ngx_log(NGX_ERR, "asking redirection failed for every target: ",
-                                    tostring(last_err))
-                            return nil, last_err
+                            return handle_command_with_retry(self, ask_host, ask_port, true, cmd, key, ...)
                         else
                             redis_client:close()
                             self:refresh_slots()

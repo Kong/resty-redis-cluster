@@ -287,3 +287,107 @@ third connect: 10.0.0.2:6379
 connects to the seed: 1
 --- no_error_log
 [error]
+
+
+=== TEST 6: a failed ASK attempt does not run the command twice
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- Hostname cluster: the IP and the hostname point at the same node.
+            fake.topology = 4
+            local ran = 0
+            fake.handler = function(self, cmd)
+                if cmd == "asking" then
+                    rawset(self, "_asked", true)
+                    return "OK"
+                elseif cmd == "get" then
+                    if not rawget(self, "_asked") then
+                        return false, "ASK 12182 rc-node-3:7003"
+                    end
+                    ran = ran + 1
+                    if ran == 1 then
+                        return nil, "timeout"   -- the server ran it, the caller did not see it
+                    end
+                    return "bar"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "askOnceCluster",
+                serv_list = { { ip = "10.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            red:get("foo")
+            ngx.say("command runs on the server: ", ran)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+command runs on the server: 1
+--- no_error_log
+[error]
+
+=== TEST 7: a pipeline ASK also tries the IP of the target
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.topology = 4
+            -- The hostnames of the cluster cannot be resolved from this host.
+            fake.connect = function(self, host)
+                if host:match("^rc%-node") then
+                    return nil, host .. " could not be resolved"
+                end
+                return 1
+            end
+            fake.handler = function(self, cmd)
+                if cmd == "asking" then
+                    rawset(self, "_asked", true)
+                    return "OK"
+                elseif cmd == "get" then
+                    if rawget(self, "_asked") then
+                        return "bar"
+                    end
+                    return false, "ASK 12182 rc-node-3:7003"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "askPipeHostCluster",
+                serv_list = { { ip = "10.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            red:init_pipeline()
+            red:get("foo")
+            local res, err = red:commit_pipeline()
+            if not res then
+                ngx.say("failed: ", err)
+                return
+            end
+            ngx.say("result: ", tostring(res[1]))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result: bar
+--- no_error_log
+[error]
