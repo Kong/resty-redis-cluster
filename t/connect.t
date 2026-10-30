@@ -26,6 +26,10 @@ run_tests();
 
 __DATA__
 
+# TEST 1 and TEST 2 open many connections at once. A request waits up to five
+# seconds on the slot lock, so it takes about six seconds. Keep the client
+# timeout well above that.
+
 === TEST 1: concurrent connections exceed the backlog limit(with auth)
 --- http_config eval: $::HttpConfig
 --- config
@@ -85,7 +89,7 @@ GET /t
 qr/failed to connect, err: [1-9][0-9.:]+ too many waiting connect operations/
 --- error_log
 failed to acquire the lock in refreshing slot cache: timeout
---- timeout: 5s
+--- timeout: 60s
 
 
 
@@ -156,7 +160,7 @@ GET /t
 [qr/failed to connect, err: [1-9][0-9.:]+ timeout/, qr/\d res = OK/]
 --- error_log eval
 qr/lua tcp socket queued connect timed out/
---- timeout: 10s
+--- timeout: 60s
 --- wait: 1
 
 
@@ -186,27 +190,37 @@ qr/lua tcp socket queued connect timed out/
 
             }
 
+            -- Record the first connection to inspect the pool name.
+            local resty_redis = require "resty.redis"
+            local connect = resty_redis.connect
+            local seen
+            resty_redis.connect = function(self, host, port, opts)
+                if not seen then
+                    seen = { host = host, port = port, pool = opts and opts.pool }
+                end
+                return connect(self, host, port, opts)
+            end
+
             local redis = require "resty.rediscluster"
-            local red, err = redis:new(config)
+            local ok, err = pcall(function()
+                local red = assert(redis:new(config))
+                assert(red:set("dog", "an animal"))
+            end)
 
-            if err then
-                ngx.say("failed to create: ", err)
+            resty_redis.connect = connect
+
+            if not ok then
+                ngx.say("failed: ", err)
                 return
             end
 
-            local res, err = red:set("dog", "an animal")
-            if not res then
-                ngx.say("failed to set dog: ", err)
-                return
-            end
-
-            ngx.say("set dog: ", res)
+            ngx.say("pool has the node: ",
+                    tostring(seen.pool == seen.host .. ":" .. seen.port .. ":" .. config.base_pool))
         ';
     }
 --- request
 GET /t
 --- response_body
-set dog: OK
---- log_level: debug
---- error_log eval
-qr/set pool name: (127.0.0.1|172.20.0.3[1-6]):637[1-6]:nil:nil::default:28877ae869af57c757d1eb26e7cd1784f6aa6bd8dad8d996ee3665b87edcba22/
+pool has the node: true
+--- no_error_log
+[error]

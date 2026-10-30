@@ -1042,7 +1042,7 @@ base pool changed: true
 --- no_error_log
 [error]
 
-=== TEST 25: a hook that is not a function is ignored
+=== TEST 25: a hook that is not a function is rejected
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -1062,13 +1062,88 @@ base pool changed: true
             local redis = require "resty.rediscluster"
             local red, err = redis:new(config)
             ngx.say("created: ", tostring(red ~= nil))
-            ngx.say("error has WRONGPASS: ", tostring(err ~= nil and tostring(err):find("WRONGPASS", 1, true) ~= nil))
+            ngx.say("error: ", tostring(err))
         ';
     }
 --- request
 GET /t
 --- response_body
 created: false
-error has WRONGPASS: true
+error: auth_config_reconfigurer must be a function
 --- no_error_log
-auth_config_reconfigurer failed
+[error]
+
+=== TEST 26: the library does not throttle the hook
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local calls = 0
+            local config = {
+                name = "hookNoThrottle",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                },
+                auth = "kong",
+                force_auth = true,
+                auth_config_reconfigurer = function(self, err)
+                    calls = calls + 1
+                    return false
+                end,
+            }
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new(config))
+
+            -- Rotate on the client only. The server still accepts "kong".
+            red.config.auth = "wrong-password"
+
+            local last_err
+            for i = 1, 3 do
+                local _, err = red:get("missing-key")
+                last_err = err
+            end
+
+            ngx.say("hook calls: ", calls)
+            ngx.say("last error has WRONGPASS: ", tostring(last_err ~= nil and tostring(last_err):find("WRONGPASS", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+hook calls: 3
+last error has WRONGPASS: true
+--- no_error_log
+[error]
+
+=== TEST 27: ngx.null and false mean no hook
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local redis = require "resty.rediscluster"
+
+            local expected = " redis cluster config serv_list is empty"
+
+            local conf = {
+                name = "absentHook",
+                serv_list = {},
+                auth_config_reconfigurer = ngx.null,
+            }
+            local _, err_null = redis:new(conf)
+            ngx.say("ngx.null means no hook: ", tostring(err_null == expected))
+
+            conf.auth_config_reconfigurer = false
+            local _, err_false = redis:new(conf)
+            ngx.say("false means no hook: ", tostring(err_false == expected))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+ngx.null means no hook: true
+false means no hook: true
+--- no_error_log
+[error]
