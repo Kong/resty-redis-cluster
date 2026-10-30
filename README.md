@@ -426,6 +426,10 @@ later call can finish the work.
 
 6. An instance is not reentrant for pipelines. `init_pipeline()` stores the queue on the instance, and every command on that instance joins the queue until `commit_pipeline()` or `cancel_pipeline()`. Do not let two coroutines start a pipeline on the same instance. Simple commands are safe to run from several coroutines on one instance while no pipeline is active on it.
 
+7. The client reads the IP of a node from `CLUSTER SLOTS`, which lists only the nodes that hold a slot. When a slot moves to a new node that holds no slot yet, the client reaches the ASK target by hostname only.
+
+8. The client reads an `ASK` or `MOVED` address as `host:port`. An IPv6 literal such as `[::1]:6379` does not parse.
+
 ### Compatibilty
 
 Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same suite on both versions. It leaves out only `t/z-recover.t`, which starts its own fixture.
