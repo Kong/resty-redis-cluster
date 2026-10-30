@@ -1143,7 +1143,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
                         -- Should not happen after asking target ip:port and still return ask, if so, return error.
                         redis_client:close()
                         self:refresh_slots()
-                        return nil, "nested asking redirection occurred, client cannot retry "
+                        return nil, "nested asking redirection occurred, client cannot retry"
                     else
                         local ask_host, ask_port = parse_ask_signal(err)
 
