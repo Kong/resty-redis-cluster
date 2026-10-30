@@ -1028,6 +1028,12 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
     local magic_random_seed = generate_magic_seed(self)
     local loop_counter = config.max_redirection or DEFAULT_MAX_REDIRECTION
 
+    -- `asking` says that the next attempt sends ASKING, and a MOVED clears it.
+    -- `followed_ask` says that this call came from an ASK and never changes: when the
+    -- target answers MOVED and the source answers ASK again, a second ASK must end the
+    -- request instead of recursing for ever.
+    local followed_ask = asking
+
     for k = 1, loop_counter do
         if k > 1 then
             ngx_log(NGX_NOTICE, "handle retry attempts:", k, " for cmd:", cmd, " key:", key)
@@ -1133,7 +1139,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
 
                 elseif string_sub(err, 1, 3) == "ASK" then
                     ngx_log(NGX_DEBUG, "handle asking for normal commands, cmd:", cmd, " key:", key)
-                    if asking then
+                    if followed_ask then
                         -- Should not happen after asking target ip:port and still return ask, if so, return error.
                         redis_client:close()
                         self:refresh_slots()
