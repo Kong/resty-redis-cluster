@@ -54,6 +54,10 @@ local mt = { __index = _M }
 -- name, because one worker can hold clients for clusters of different versions.
 local redis7_with_host = {}
 
+-- IP of a node, keyed by "<hostname>:<port>". Only a cluster that announces
+-- hostnames fills it. One entry for each cluster name.
+local ask_ip_by_host = {}
+
 local slot_cache = {}
 local master_nodes = {}
 
@@ -429,6 +433,7 @@ local function parse_slots(self, redis_client)
 
     -- Set when a node report carries the IP next to the hostname.
     local cluster_uses_ip = false
+    local host_ip = {}
 
     for i = 1, #slots_data do
         -- Redis 6: { 0, 5460, { "172.26.0.21", 6379, "b050a28d860201c487891ecde77efc8a3935ea51" }, { "172.26.0.25", 6379, "20d96bc4a640fd244699e29274b2c94962def80e" } }
@@ -467,6 +472,7 @@ local function parse_slots(self, redis_client)
             local uses_ip = server_ip ~= nil and server_ip ~= server_hostname_or_ip
             if uses_ip then
                 cluster_uses_ip = true
+                host_ip[server_hostname_or_ip .. ":" .. server_port] = server_ip
 
                 -- prioritize IP address over hostname as IP does not suffer from stale DNS cache
                 local ip_port = { ip = server_ip, port = server_port }
@@ -511,6 +517,7 @@ local function parse_slots(self, redis_client)
 
     master_nodes[self.config.name .. "master_list"] = master_list
     redis7_with_host[self.config.name] = cluster_uses_ip
+    ask_ip_by_host[self.config.name] = host_ip
 
     ngx_log(NGX_DEBUG, "finished initializing slot cache")
     return true
@@ -1003,26 +1010,12 @@ end
 -- hostnames, that address is a hostname and the slot map also holds the IP of
 -- the same node. Return the IP first, then the address of the reply.
 local function ask_targets(self, host, port)
-    local targets = {}
-    local want_port = tostring(port)
-    local all = slot_cache[self.config.name .. "serv_list"]
-
-    -- parse_slots() stores the IP of a node right before its hostname.
-    local serv_list = all and all.serv_list or {}
-    for i = 2, #serv_list, 2 do
-        local hostname = serv_list[i]
-        local ip = serv_list[i - 1]
-        if hostname.ip == host
-           and tostring(hostname.port) == want_port
-           and ip and ip.ip ~= host
-           and tostring(ip.port) == want_port then
-            targets[1] = { ip = ip.ip, port = ip.port }
-            break
-        end
+    local map = ask_ip_by_host[self.config.name]
+    local ip = map and map[host .. ":" .. tostring(port)]
+    if ip and ip ~= host then
+        return { { ip = ip, port = port }, { ip = host, port = port } }
     end
-
-    targets[#targets + 1] = { ip = host, port = port }
-    return targets
+    return { { ip = host, port = port } }
 end
 
 

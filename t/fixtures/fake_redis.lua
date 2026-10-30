@@ -55,7 +55,17 @@ local function slots_v4()
     }
 end
 
-local topologies = { slots_v1, slots_v2, slots_v3, slots_v4 }
+-- Version 5: a pure IP cluster where every node uses the same port, so the entries
+-- of the flat serv_list are nodes of their own and not an IP/hostname pair.
+local function slots_v5()
+    return {
+        { 0, 5460,      { "10.0.0.1", 6379, "id1" } },
+        { 5461, 10922,  { "10.0.0.2", 6379, "id2" } },
+        { 10923, 16383, { "10.0.0.3", 6379, "id3" } },
+    }
+end
+
+local topologies = { slots_v1, slots_v2, slots_v3, slots_v4, slots_v5 }
 
 local NODES = table.concat({
     "id1 127.0.0.1:7001@17001 master - 0 0 1 connected 0-5460",

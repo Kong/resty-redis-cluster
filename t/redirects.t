@@ -232,3 +232,58 @@ result: bar err: nil
 asking: 1
 --- no_error_log
 [error]
+
+
+=== TEST 5: an ASK reply in a pure IP cluster reaches the target directly
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- Every node uses port 6379, so a pairing by position would treat the
+            -- previous node as the IP of the ASK target.
+            fake.topology = 5
+            fake.handler = function(self, cmd)
+                if cmd == "get" and self._node == "10.0.0.3:6379" then
+                    return false, "ASK 12182 10.0.0.2:6379"
+                elseif cmd == "asking" then
+                    return "OK"
+                elseif cmd == "get" then
+                    return "bar"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "pureIpCluster",
+                serv_list = { { ip = "10.0.0.1", port = 6379 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            assert(red:get("foo"))
+
+            local nodes, to_seed = {}, 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "connect" then
+                    nodes[#nodes + 1] = e.node
+                    if e.node == "10.0.0.1:6379" then
+                        to_seed = to_seed + 1
+                    end
+                end
+            end
+            ngx.say("third connect: ", tostring(nodes[3]))
+            ngx.say("connects to the seed: ", to_seed)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+third connect: 10.0.0.2:6379
+connects to the seed: 1
+--- no_error_log
+[error]
