@@ -425,7 +425,7 @@ later call can finish the work.
 
 ### Compatibilty
 
-Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the full suite on `6.2` and the auth and client suites on `7.2`.
+Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same suite on both versions. It leaves out only `t/z-recover.t`, which starts its own fixture.
 
 ### Changelog
 
