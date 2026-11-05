@@ -29,7 +29,9 @@ jobs:
                 - version: 7.2
                   conf: hostname
                   auth: "yes"
-        runs-on: ubuntu-latest
+        # Pinned: the OpenResty apt repository has no packages for newer Ubuntu releases,
+        # so ubuntu-latest breaks the install as soon as it moves past 24.04.
+        runs-on: ubuntu-24.04
 
         steps:
           - name: Checkout
