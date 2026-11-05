@@ -1822,6 +1822,50 @@ function _M.scan_all(self, cursor, ...)
 end
 
 
+--- The library returns each connection to the pool after its command.
+-- This method exists so that a caller can use one code path for a single-node
+-- client and a cluster client.
+function _M.set_keepalive(self)
+    ngx_log(NGX_DEBUG, "set_keepalive() is a no-op on a cluster client")
+    return 1
+end
+
+
+--- Drop a pipeline that the caller started and abandoned.
+-- Pooled connections stay open: the library releases each connection after its
+-- command.
+function _M.close(self)
+    ngx_log(NGX_DEBUG, "close() does not close pooled cluster connections")
+    if rawget(self, "_reqs") then
+        self._reqs = nil
+    end
+
+    return 1
+end
+
+
+--- Return the number of times the current connection was reused.
+-- A cluster client keeps one pool for each node, so it cannot answer this for a
+-- single connection. Zero tells the caller not to skip the first command.
+function _M.get_reused_times(self)
+    return 0
+end
+
+
+--- Convert a flat array of field and value pairs to a table.
+-- resty.redis provides this helper. The cluster client needs its own copy,
+-- because it does not inherit from resty.redis.
+function _M.array_to_hash(self, t)
+    local n = #t
+    local h = new_tab(0, n / 2)
+    for i = 1, n, 2 do
+        h[t[i]] = t[i + 1]
+    end
+
+    return h
+end
+
+
 local function _do_eval_cmd(self, cmd, ...)
 --[[
 eval command usage:
