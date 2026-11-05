@@ -71,6 +71,38 @@ local cluster_invalid_cmds = {
     ["shutdown"] = true
 }
 
+-- Commands that take more than one key. `keys` says where the keys are in the
+-- argument list. A command with `split = true` sends one part for each slot and
+-- combines the parts. A command with `split = false` is sent unchanged when all
+-- keys are in one slot, and returns an error when the keys span slots.
+local multi_key_cmds = {
+    mget    = { keys = "all",     split = true,  combine = "array" },
+    del     = { keys = "all",     split = true,  combine = "sum"   },
+    unlink  = { keys = "all",     split = true,  combine = "sum"   },
+    exists  = { keys = "all",     split = true,  combine = "sum"   },
+    touch   = { keys = "all",     split = true,  combine = "sum"   },
+
+    mset    = { keys = "stride2", split = false },
+    msetnx  = { keys = "stride2", split = false },
+    sinter  = { keys = "all",     split = false },
+    sunion  = { keys = "all",     split = false },
+    sdiff   = { keys = "all",     split = false },
+    pfcount = { keys = "all",     split = false },
+    rename  = { keys = "all",     split = false },
+    smove   = { keys = "first2",  split = false },
+}
+
+
+-- Use the same text for a key and for its slot. resty.redis converts a
+-- non-string argument with tostring() before it sends the argument.
+local function normalize_key(arg)
+    if type(arg) == "string" then
+        return arg
+    end
+
+    return tostring(arg)
+end
+
 
 local CACHED_SHA256
 
@@ -1023,7 +1055,7 @@ local function handle_command_with_retry(self, target_ip, target_port, asking, c
     local config = self.config
 
     -- key will be passed to resty.redis
-    local slot = redis_slot(tostring(key))
+    local slot = redis_slot(normalize_key(key))
 
     local magic_random_seed = generate_magic_seed(self)
     local loop_counter = config.max_redirection or DEFAULT_MAX_REDIRECTION
@@ -1219,28 +1251,6 @@ local function _do_cmd_master(self, cmd, key, ...)
     return true, nil
 end
 
-local function _do_cmd(self, cmd, key, ...)
-    if cluster_invalid_cmds[cmd] == true then
-        return nil, "command not supported"
-    end
-
-    local _reqs = rawget(self, "_reqs")
-    if _reqs then
-        local args = { ... }
-        local t = { cmd = cmd, key = key, args = args }
-        table_insert(_reqs, t)
-        return
-    end
-
-    if cmds_for_all_master[cmd] then
-        return _do_cmd_master(self, cmd, key, ...)
-    end
-
-    local res, err = handle_command_with_retry(self, nil, nil, false, cmd, key, ...)
-    return res, err
-end
-
-
 local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
     --construct final result with origin index
     local finalret = {}
@@ -1322,7 +1332,7 @@ local function run_requests(self, reqs)
         -- we need to record the original index and finally we can construct the result with origin order
         reqs[i].origin_index = i
         local key = reqs[i].key
-        local slot = redis_slot(tostring(key))
+        local slot = redis_slot(normalize_key(key))
         if slots[slot] == nil then
             self:refresh_slots()
             return nil, "not slots information present, nginx might have never successfully executed cluster(\"slots\")"
@@ -1433,6 +1443,216 @@ local function run_requests(self, reqs)
 end
 
 
+local function group_keys_by_slot(keys)
+    local groups = {}
+    local order = {}
+
+    for i = 1, #keys do
+        local slot = redis_slot(normalize_key(keys[i]))
+        local group = groups[slot]
+        if not group then
+            group = new_tab(2, 0)
+            groups[slot] = group
+            order[#order + 1] = slot
+        end
+        group[#group + 1] = { index = i, key = keys[i] }
+    end
+
+    return order, groups
+end
+
+
+-- A pipeline result holds { false, err } for a command that Redis rejected.
+local function pipeline_error(result)
+    if type(result) == "table" and result[1] == false then
+        return result[2]
+    end
+end
+
+
+-- Build one request for each slot. Each request holds the first key of the slot
+-- and the remaining keys of that slot.
+local function build_slot_requests(cmd, order, groups)
+    local reqs = new_tab(#order, 0)
+
+    for i = 1, #order do
+        local group = groups[order[i]]
+        local args = new_tab(#group - 1, 0)
+        for j = 2, #group do
+            args[j - 1] = group[j].key
+        end
+        reqs[i] = { cmd = cmd, key = group[1].key, args = args }
+    end
+
+    return reqs
+end
+
+
+-- MGET-like commands: the reply is one value for each key, in the order of the
+-- keys. Send one part for each slot, then put the values back in that order.
+local function split_array_command(self, cmd, keys)
+    local order, groups = group_keys_by_slot(keys)
+
+    if #order == 1 then
+        return handle_command_with_retry(self, nil, nil, false, cmd, unpack(keys))
+    end
+
+    ngx_log(NGX_DEBUG, "split ", cmd, ": ", #keys, " keys in ", #order, " slots")
+
+    local results, err = run_requests(self, build_slot_requests(cmd, order, groups))
+    if not results then
+        return nil, err
+    end
+
+    local values = new_tab(#keys, 0)
+    for i = 1, #order do
+        local group = groups[order[i]]
+        local part = results[i]
+        local part_err = pipeline_error(part)
+        if part_err then
+            return nil, part_err
+        end
+
+        if type(part) ~= "table" then
+            return nil, "unexpected " .. cmd .. " reply for slot " .. order[i]
+        end
+
+        for j = 1, #group do
+            values[group[j].index] = part[j]
+        end
+    end
+
+    return values
+end
+
+
+-- DEL-like commands: the reply is a count. Send one part for each slot and add
+-- the counts.
+local function split_sum_command(self, cmd, keys)
+    local order, groups = group_keys_by_slot(keys)
+
+    if #order == 1 then
+        return handle_command_with_retry(self, nil, nil, false, cmd, unpack(keys))
+    end
+
+    ngx_log(NGX_DEBUG, "split ", cmd, ": ", #keys, " keys in ", #order, " slots")
+
+    local results, err = run_requests(self, build_slot_requests(cmd, order, groups))
+    if not results then
+        return nil, err
+    end
+
+    local total = 0
+    for i = 1, #order do
+        local count = results[i]
+        local count_err = pipeline_error(count)
+        if count_err then
+            return nil, count_err
+        end
+
+        if type(count) ~= "number" then
+            return nil, "unexpected " .. cmd .. " reply for slot " .. order[i]
+        end
+
+        total = total + count
+    end
+
+    return total
+end
+
+
+local function collect_command_keys(spec, key, ...)
+    local args = { key, ... }
+
+    if spec.keys == "stride2" then
+        local keys = new_tab(math.ceil(#args / 2), 0)
+        for i = 1, #args, 2 do
+            keys[#keys + 1] = args[i]
+        end
+
+        return keys
+    end
+
+    -- SMOVE takes two keys and a member.
+    if spec.keys == "first2" then
+        local keys = new_tab(2, 0)
+        keys[1] = args[1]
+        keys[2] = args[2]
+
+        return keys
+    end
+
+    return args
+end
+
+
+-- A command that cannot be split only works when all of its keys share a slot.
+local function check_keys_in_one_slot(cmd, keys)
+    if #keys < 2 then
+        return true
+    end
+
+    local slot = redis_slot(normalize_key(keys[1]))
+    for i = 2, #keys do
+        if redis_slot(normalize_key(keys[i])) ~= slot then
+            return nil, "command '" .. cmd .. "' needs all keys in one slot; " ..
+                        "use a hash tag or split the call"
+        end
+    end
+
+    return true
+end
+
+
+local function _do_cmd(self, cmd, key, ...)
+    if cluster_invalid_cmds[cmd] == true then
+        return nil, "command not supported"
+    end
+
+    local spec = multi_key_cmds[cmd]
+
+    local _reqs = rawget(self, "_reqs")
+    if _reqs then
+        if spec then
+            return nil, "command '" .. cmd .. "' is not supported inside a pipeline; " ..
+                        "call it directly"
+        end
+
+        local args = { ... }
+        local t = { cmd = cmd, key = key, args = args }
+        table_insert(_reqs, t)
+        return
+    end
+
+    if spec then
+        local keys = collect_command_keys(spec, key, ...)
+        if #keys == 0 then
+            return nil, "wrong number of arguments for '" .. cmd .. "' command"
+        end
+
+        if spec.split then
+            if spec.combine == "array" then
+                return split_array_command(self, cmd, keys)
+            end
+
+            return split_sum_command(self, cmd, keys)
+        end
+
+        local ok, err = check_keys_in_one_slot(cmd, keys)
+        if not ok then
+            return nil, err
+        end
+    end
+
+    if cmds_for_all_master[cmd] then
+        return _do_cmd_master(self, cmd, key, ...)
+    end
+
+    local res, err = handle_command_with_retry(self, nil, nil, false, cmd, key, ...)
+    return res, err
+end
+
+
 function _M.commit_pipeline(self)
     local _reqs = rawget(self, "_reqs")
 
@@ -1468,72 +1688,6 @@ eval(script, 0, arg1, arg2 ...)
     return _do_cmd(self, cmd, key, ...)
 end
 
--- mget/mset: split the keys by slot, run one command per slot and merge the replies.
--- A single slot (e.g. all keys share a hash tag) and pipelines take the plain path.
-local function _do_multi_key_cmd(self, cmd, ...)
-    -- a pipeline queues the call as it is
-    if rawget(self, "_reqs") then
-        return _do_cmd(self, cmd, ...)
-    end
-
-    local args = { ... }
-    local nargs = select("#", ...)
-    local step = cmd == "mset" and 2 or 1
-
-    if nargs == 0 or nargs % step ~= 0 then
-        return nil, "wrong number of arguments for '" .. cmd .. "' command"
-    end
-    for i = 1, nargs do
-        if args[i] == nil then
-            return nil, "nil argument for '" .. cmd .. "' command"
-        end
-    end
-
-    local groups, order = {}, {}
-    for i = 1, nargs, step do
-        local slot = redis_slot(tostring(args[i]))
-        local group = groups[slot]
-        if not group then
-            group = { args = {}, indexes = {} }
-            groups[slot] = group
-            order[#order + 1] = slot
-        end
-        local group_args = group.args
-        group_args[#group_args + 1] = args[i]
-        if step == 2 then
-            group_args[#group_args + 1] = args[i + 1]
-        end
-        group.indexes[#group.indexes + 1] = (i - 1) / step + 1
-    end
-
-    if #order == 1 then
-        return _do_cmd(self, cmd, ...)
-    end
-
-    local merged = {}
-    for _, slot in ipairs(order) do
-        local group = groups[slot]
-        local res, err = _do_cmd(self, cmd, unpack(group.args))
-        if err or not res then
-            return nil, err
-        end
-        if cmd == "mget" then
-            if type(res) ~= "table" then
-                return nil, "unexpected reply for 'mget' command"
-            end
-            for j, index in ipairs(group.indexes) do
-                merged[index] = res[j]
-            end
-        end
-    end
-
-    if cmd == "mset" then
-        return "OK"
-    end
-    return merged
-end
-
-
 -- dynamic cmd
 setmetatable(_M, {
     __index = function(_, cmd)
@@ -1541,8 +1695,6 @@ setmetatable(_M, {
         function(self, ...)
             if cmd == "eval" or cmd == "evalsha" then
                 return _do_eval_cmd(self, cmd, ...)
-            elseif cmd == "mget" or cmd == "mset" then
-                return _do_multi_key_cmd(self, cmd, ...)
             else
                 return _do_cmd(self, cmd, ...)
             end
