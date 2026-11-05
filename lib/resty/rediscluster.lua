@@ -1604,6 +1604,87 @@ local function check_keys_in_one_slot(cmd, keys)
 end
 
 
+-- A cluster-wide SCAN uses a cursor with three parts: the index of the master to
+-- visit, the number of masters seen when the iteration started, and the cursor of
+-- that master. "0" means that the whole iteration is complete.
+local SCAN_CURSOR_PATTERN = "^(%d+):(%d+):(%d+)$"
+
+
+local function scan_master_list(self)
+    local list = master_nodes[self.config.name .. "master_list"]
+    if not list or #list == 0 then
+        local ok, err = self:init_slots()
+        if not ok then
+            return nil, err
+        end
+
+        list = master_nodes[self.config.name .. "master_list"]
+        if not list or #list == 0 then
+            return nil, "no master nodes in the slot cache"
+        end
+    end
+
+    -- One master can own several slot ranges, so the list can hold duplicates.
+    local seen = {}
+    local masters = new_tab(#list, 0)
+    for i = 1, #list do
+        local node = list[i]
+        local id = tostring(node.ip) .. ":" .. tostring(node.port)
+        if not seen[id] then
+            seen[id] = true
+            masters[#masters + 1] = node
+        end
+    end
+
+    return masters
+end
+
+
+-- SCAN on one master. This path cannot use handle_command_with_retry, because
+-- that function uses the cursor as the routing key.
+local function scan_one_master(self, master, cursor, ...)
+    local config = self.config
+    local redis_client = redis:new()
+    redis_client:set_timeouts(config.connect_timeout or DEFAULT_CONNECTION_TIMEOUT,
+                              config.send_timeout or DEFAULT_SEND_TIMEOUT,
+                              config.read_timeout or DEFAULT_READ_TIMEOUT)
+
+    local ok, err = connect_with_pool(redis_client, master.ip, master.port, config)
+    if not ok then
+        return nil, "failed to connect to " .. tostring(master.ip) .. ":" ..
+                    tostring(master.port) .. ": " .. tostring(err)
+    end
+
+    local _, auth_err = check_auth_with_retry(self, redis_client)
+    if auth_err then
+        redis_client:close()
+        return nil, auth_err
+    end
+
+    local res, scan_err = redis_client:scan(cursor, ...)
+    if not res then
+        redis_client:close()
+        return nil, scan_err
+    end
+
+    release_connection(redis_client, config)
+
+    return res
+end
+
+
+-- Return the COUNT option of SCAN, so one call does not return the keys of many
+-- masters at the same time.
+local function scan_count(...)
+    local args = { ... }
+    for i = 1, #args - 1 do
+        if type(args[i]) == "string" and string.upper(args[i]) == "COUNT" then
+            return tonumber(args[i + 1])
+        end
+    end
+end
+
+
 local function _do_cmd(self, cmd, key, ...)
     if cluster_invalid_cmds[cmd] == true then
         return nil, "command not supported"
@@ -1667,6 +1748,77 @@ end
 
 function _M.cancel_pipeline(self)
     self._reqs = nil
+end
+
+
+--- Scan every master of the cluster.
+-- Pass the same options on every call, as with the Redis SCAN command. Compare
+-- the returned cursor with "0" to stop.
+-- @tparam string|number cursor The cursor of the previous call, or "0" to start.
+-- @treturn string|nil The next cursor, or nil and an error.
+-- @treturn table|nil The keys found in this call.
+-- @treturn string|nil The error message.
+function _M.scan_all(self, cursor, ...)
+    local masters, err = scan_master_list(self)
+    if not masters then
+        return nil, err
+    end
+
+    local total = #masters
+    local index, node_cursor
+
+    if cursor == "0" or cursor == 0 then
+        index, node_cursor = 1, "0"
+    else
+        local i, seen_total, node = string.match(tostring(cursor), SCAN_CURSOR_PATTERN)
+        if not i then
+            return nil, "invalid scan cursor: " .. tostring(cursor)
+        end
+
+        i, seen_total = tonumber(i), tonumber(seen_total)
+        if seen_total ~= total then
+            return nil, "scan cursor is stale: the cluster has " .. total ..
+                        " masters now and the cursor was made with " .. seen_total ..
+                        "; restart with cursor 0"
+        end
+
+        if i < 1 or i > total then
+            return nil, "invalid scan cursor: " .. tostring(cursor)
+        end
+
+        index, node_cursor = i, node
+    end
+
+    local budget = scan_count(...)
+    local keys = {}
+
+    while index <= total do
+        local res, scan_err = scan_one_master(self, masters[index], node_cursor, ...)
+        if not res then
+            return nil, scan_err
+        end
+
+        node_cursor = tostring(res[1])
+        local page = res[2] or {}
+        for i = 1, #page do
+            keys[#keys + 1] = page[i]
+        end
+
+        if node_cursor == "0" then
+            index = index + 1
+            node_cursor = "0"
+        end
+
+        if budget and #keys >= budget then
+            break
+        end
+    end
+
+    if index > total then
+        return "0", keys
+    end
+
+    return index .. ":" .. total .. ":" .. node_cursor, keys
 end
 
 
