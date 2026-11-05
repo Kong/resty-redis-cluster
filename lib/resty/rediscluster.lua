@@ -1301,13 +1301,10 @@ function _M.init_pipeline(self)
 end
 
 
-function _M.commit_pipeline(self)
-    local _reqs = rawget(self, "_reqs")
-
-    if not _reqs or #_reqs == 0 then return nil, "no pipeline"
-    end
-
-    self._reqs = nil
+-- Send pre-built requests to the nodes that own their keys. Return the results in the
+-- order of `reqs`. This function does not touch `self._reqs`, so a caller can use it
+-- while another coroutine uses the same instance.
+local function run_requests(self, reqs)
     local config = self.config
 
     local slots = slot_cache[config.name]
@@ -1320,11 +1317,11 @@ function _M.commit_pipeline(self)
     local node_req_map = {}
 
     --construct req to real node mapping
-    for i = 1, #_reqs do
+    for i = 1, #reqs do
         -- Because we will forward req to different nodes, so the result will not be the origin order,
         -- we need to record the original index and finally we can construct the result with origin order
-        _reqs[i].origin_index = i
-        local key = _reqs[i].key
+        reqs[i].origin_index = i
+        local key = reqs[i].key
         local slot = redis_slot(tostring(key))
         if slots[slot] == nil then
             self:refresh_slots()
@@ -1338,7 +1335,7 @@ function _M.commit_pipeline(self)
             node_res_map[node] = {}
         end
         local ins_req = node_req_map[node].reqs
-        ins_req[#ins_req + 1] = _reqs[i]
+        ins_req[#ins_req + 1] = reqs[i]
     end
 
     -- We must empty local reference to slots cache, otherwise there will be memory issue while
@@ -1348,7 +1345,7 @@ function _M.commit_pipeline(self)
     local magic_random_seed = generate_magic_seed(self)
 
     for k, v in pairs(node_req_map) do
-        local reqs = v.reqs
+        local node_reqs = v.reqs
 
         local ip, port, slave
         local redis_client
@@ -1394,8 +1391,8 @@ function _M.commit_pipeline(self)
         end
 
         redis_client:init_pipeline()
-        for i = 1, #reqs do
-            local req = reqs[i]
+        for i = 1, #node_reqs do
+            local req = node_reqs[i]
             if #req.args > 0 then
                 if req.cmd == "eval" or req.cmd == "evalsha" then
                     redis_client[req.cmd](redis_client, unpack(req.args))
@@ -1433,6 +1430,18 @@ function _M.commit_pipeline(self)
     else
         return nil, err .. " failed to construct final pipeline result "
     end
+end
+
+
+function _M.commit_pipeline(self)
+    local _reqs = rawget(self, "_reqs")
+
+    if not _reqs or #_reqs == 0 then return nil, "no pipeline"
+    end
+
+    self._reqs = nil
+
+    return run_requests(self, _reqs)
 end
 
 
