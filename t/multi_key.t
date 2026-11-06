@@ -262,7 +262,7 @@ commands: del=3 exists=3
 --- no_error_log
 [error]
 
-=== TEST 6: a multi-key command inside a pipeline returns an error
+=== TEST 6: a cross-slot multi-key command inside a pipeline returns an error
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -302,12 +302,67 @@ commands: del=3 exists=3
 GET /t
 --- response_body
 res: nil
-err: command 'mget' is not supported inside a pipeline; call it directly
+err: command 'mget' needs one slot inside a pipeline; call it directly or use a hash tag
 sent: 0
 --- no_error_log
 [error]
 
-=== TEST 7: a command that cannot be split rejects keys in different slots
+=== TEST 7: a multi-key command in one slot can still use a pipeline
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, ...)
+                if cmd == "mget" then
+                    local keys = { ... }
+                    local out = {}
+                    for i = 1, #keys do
+                        out[i] = "v:" .. tostring(keys[i])
+                    end
+                    return out
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkPipelineOneSlot",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            red:init_pipeline()
+            local queued, qerr = red:mget("{s}one", "{s}two")
+            local res, err = red:commit_pipeline()
+
+            local count = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "mget" then
+                    count = count + 1
+                end
+            end
+            ngx.say("queued: ", tostring(queued), " ", tostring(qerr))
+            ngx.say("err: ", tostring(err))
+            ngx.say("values: ", res and table.concat(res[1], ",") or "nil")
+            ngx.say("sent: ", count)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+queued: nil nil
+err: nil
+values: v:{s}one,v:{s}two
+sent: 1
+--- no_error_log
+[error]
+
+=== TEST 8: a command that cannot be split rejects keys in different slots
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -351,7 +406,7 @@ sent: 1
 --- no_error_log
 [error]
 
-=== TEST 8: MSET with keys in one slot is sent unchanged
+=== TEST 9: MSET with keys in one slot is sent unchanged
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -396,7 +451,7 @@ count: 1 args: {s}a+1+{s}b+2
 --- no_error_log
 [error]
 
-=== TEST 9: a numeric key is routed by the text that the client sends
+=== TEST 10: a numeric key is routed by the text that the client sends
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -450,7 +505,7 @@ cmds: 42,b
 --- no_error_log
 [error]
 
-=== TEST 10: a part that Redis rejects returns the Redis error
+=== TEST 11: a part that Redis rejects returns the Redis error
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -486,11 +541,11 @@ cmds: 42,b
 GET /t
 --- response_body
 res: nil
-err: ERR del failed
+err: del failed for slot 8157: ERR del failed
 --- no_error_log
 [error]
 
-=== TEST 11: SMOVE checks its two keys and ignores the member
+=== TEST 12: SMOVE checks its two keys and ignores the member
 --- http_config eval: $::HttpConfig
 --- config
     location /t {

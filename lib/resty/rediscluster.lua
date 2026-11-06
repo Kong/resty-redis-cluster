@@ -1510,7 +1510,7 @@ local function split_array_command(self, cmd, keys)
         local part = results[i]
         local part_err = pipeline_error(part)
         if part_err then
-            return nil, part_err
+            return nil, cmd .. " failed for slot " .. order[i] .. ": " .. tostring(part_err)
         end
 
         if type(part) ~= "table" then
@@ -1547,7 +1547,7 @@ local function split_sum_command(self, cmd, keys)
         local count = results[i]
         local count_err = pipeline_error(count)
         if count_err then
-            return nil, count_err
+            return nil, cmd .. " failed for slot " .. order[i] .. ": " .. tostring(count_err)
         end
 
         if type(count) ~= "number" then
@@ -1691,12 +1691,20 @@ local function _do_cmd(self, cmd, key, ...)
     end
 
     local spec = multi_key_cmds[cmd]
+    local keys
+
+    if spec then
+        keys = collect_command_keys(spec, key, ...)
+        if #keys == 0 then
+            return nil, "wrong number of arguments for '" .. cmd .. "' command"
+        end
+    end
 
     local _reqs = rawget(self, "_reqs")
     if _reqs then
-        if spec then
-            return nil, "command '" .. cmd .. "' is not supported inside a pipeline; " ..
-                        "call it directly"
+        if spec and not check_keys_in_one_slot(cmd, keys) then
+            return nil, "command '" .. cmd .. "' needs one slot inside a pipeline; " ..
+                        "call it directly or use a hash tag"
         end
 
         local args = { ... }
@@ -1706,11 +1714,6 @@ local function _do_cmd(self, cmd, key, ...)
     end
 
     if spec then
-        local keys = collect_command_keys(spec, key, ...)
-        if #keys == 0 then
-            return nil, "wrong number of arguments for '" .. cmd .. "' command"
-        end
-
         if spec.split then
             if spec.combine == "array" then
                 return split_array_command(self, cmd, keys)
