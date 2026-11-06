@@ -413,9 +413,57 @@ end
 other masters and returns an error that lists the failed nodes. Both commands are idempotent, so a
 later call can finish the work.
 
+### Multi-key commands
+
+Some commands take more than one key. Redis rejects such a command with `CROSSSLOT` when its keys
+are in different slots. The client sends one part for each slot, then combines the parts:
+
+| Command | Result |
+| --- | --- |
+| `MGET` | The values, in the order of the keys |
+| `MSET` | `OK`, after every part succeeds |
+| `DEL`, `UNLINK`, `EXISTS`, `TOUCH` | The sum of the counts |
+
+A cross-slot `MSET` is not atomic. An error on a later slot can leave the earlier slots written.
+
+A command that cannot be split keeps its normal behavior when all of its keys share a slot:
+
+| Command | Keys in one slot | Keys in different slots |
+| --- | --- | --- |
+| `MSETNX` | Sent unchanged | Returns an error |
+| `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `SMOVE` | Sent unchanged | Returns an error |
+
+A multi-key command inside a pipeline must use one slot. A command that spans slots returns an
+error; call it directly, or use a hash tag. A command with a `nil` argument, or with an argument
+count that does not match the command, also returns an error.
+
+To keep related keys in one slot, use a hash tag. For example, `entitlement:{plugin-id}:subject`
+puts every key of one plugin instance in one slot.
+
+### Scanning the whole cluster
+
+`SCAN` takes its cursor as the first argument, and the client routes a command by its first
+argument. A plain `SCAN` therefore reads one master only. Use `scan_all` to read every master:
+
+```lua
+local cursor = "0"
+repeat
+    local keys
+    cursor, keys = red_c:scan_all(cursor, "MATCH", "prefix:*", "COUNT", 1000)
+    for _, key in ipairs(keys) do
+        -- use the key
+    end
+until cursor == "0"
+```
+
+The cursor is opaque. Compare it with `"0"` to stop, and pass the same options on every call.
+`COUNT` limits the number of keys that one call returns, not the number of keys for each master.
+When the number of masters changes during the iteration, `scan_all` returns an error and asks you
+to start again from cursor `0`.
+
 ### Limitation
 
-1. Doesn't support MSET, MGET operations yet
+1. `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots.
 
 2. Doesn't support transactions operations: MULTI DISCARD EXEC WATCH
 
@@ -440,7 +488,11 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same s
 
 #### Unreleased
 
-1. TBD
+1. Split `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A cross-slot `MSET` is not atomic.
+2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`.
+3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument or a wrong argument count also returns an error.
+4. Add `scan_all()` to scan every master.
+5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.
 
 #### 1.7.0
 
