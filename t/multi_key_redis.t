@@ -118,7 +118,7 @@ exists after: 0
 --- no_error_log
 [error]
 
-=== TEST 3: MSET returns an error when the keys are in different slots
+=== TEST 3: MSET with keys in different slots writes every key
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -147,17 +147,18 @@ exists after: 0
             assert(red:flushall())
 
             local ok, err = red:mset("mk:a", "1", "mk:b", "2")
-            local value = red:get("mk:a")
+            local va = red:get("mk:a")
+            local vb = red:get("mk:b")
 
             ngx.say("mset: ", tostring(ok), " ", tostring(err))
-            ngx.say("mk:a: ", value == ngx.null and "null" or tostring(value))
+            ngx.say("values: ", tostring(va), ",", tostring(vb))
         ';
     }
 --- request
 GET /t
 --- response_body
-mset: nil command 'mset' needs all keys in one slot; use a hash tag or split the call
-mk:a: null
+mset: OK nil
+values: 1,2
 --- no_error_log
 [error]
 
