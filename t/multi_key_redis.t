@@ -59,7 +59,7 @@ __DATA__
             assert(red:set("mk:c", "vc"))
             assert(red:set("mk:d", "vd"))
 
-            local res, err = red:mget("mk:a", "mk:b", "mk:c", "mk:d", "mk:missing")
+            local res, err = red:mget("mk:a", "mk:b", "mk:c", "mk:b", "mk:missing")
             ngx.say("err: ", tostring(err))
             ngx.say("values: ", cjson.encode(res))
         ';
@@ -68,7 +68,7 @@ __DATA__
 GET /t
 --- response_body
 err: nil
-values: ["va","vb","vc","vd",null]
+values: ["va","vb","vc","vb",null]
 --- no_error_log
 [error]
 

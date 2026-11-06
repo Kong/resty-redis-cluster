@@ -715,3 +715,58 @@ sent: 0
 --- no_error_log
 [error]
 
+=== TEST 16: a repeated key keeps its value and its position
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, ...)
+                if cmd == "mget" then
+                    local keys = { ... }
+                    local out = {}
+                    for i = 1, #keys do
+                        out[i] = "v:" .. tostring(keys[i])
+                    end
+                    return out
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkRepeat",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:mget("b", "z", "b")
+
+            local cmds = {}
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "mget" then
+                    local args = {}
+                    for i = 1, #e.args do
+                        args[i] = tostring(e.args[i])
+                    end
+                    cmds[#cmds + 1] = e.node .. "=" .. table.concat(args, "+")
+                end
+            end
+            table.sort(cmds)
+
+            ngx.say("values: ", table.concat(res or {}, ","), " err: ", tostring(err))
+            ngx.say("cmds: ", table.concat(cmds, " "))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+values: v:b,v:z,v:b err: nil
+cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
+--- no_error_log
+[error]
+
