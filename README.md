@@ -421,16 +421,21 @@ are in different slots. The client sends one part for each slot, then combines t
 | Command | Result |
 | --- | --- |
 | `MGET` | The values, in the order of the keys |
+| `MSET` | `OK`, after every part succeeds |
 | `DEL`, `UNLINK`, `EXISTS`, `TOUCH` | The sum of the counts |
+
+A cross-slot `MSET` is not atomic. An error on a later slot can leave the earlier slots written.
 
 A command that cannot be split keeps its normal behavior when all of its keys share a slot:
 
 | Command | Keys in one slot | Keys in different slots |
 | --- | --- | --- |
-| `MSET`, `MSETNX` | Sent unchanged | Returns an error |
+| `MSETNX` | Sent unchanged | Returns an error |
 | `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `SMOVE` | Sent unchanged | Returns an error |
 
-A multi-key command inside a pipeline returns an error. Call the command directly instead.
+A multi-key command inside a pipeline must use one slot. A command that spans slots returns an
+error; call it directly, or use a hash tag. A command with a `nil` argument, or with an argument
+count that does not match the command, also returns an error.
 
 To keep related keys in one slot, use a hash tag. For example, `entitlement:{plugin-id}:subject`
 puts every key of one plugin instance in one slot.
@@ -458,7 +463,7 @@ to start again from cursor `0`.
 
 ### Limitation
 
-1. `MSET` and `MSETNX` are not split across slots. They return an error when their keys are in different slots.
+1. `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots.
 
 2. Doesn't support transactions operations: MULTI DISCARD EXEC WATCH
 
@@ -483,9 +488,9 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same s
 
 #### Unreleased
 
-1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot `MGET` no longer fails with `CROSSSLOT`.
-2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`.
-3. A multi-key command inside a pipeline returns an error. Call the command directly instead.
+1. Split `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A cross-slot `MSET` is not atomic.
+2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`.
+3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument or a wrong argument count also returns an error.
 4. Add `scan_all()` to scan every master.
 5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.
 
