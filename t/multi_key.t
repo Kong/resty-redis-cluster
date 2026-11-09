@@ -821,3 +821,114 @@ ok: true sent: 1
 --- no_error_log
 [error]
 
+=== TEST 18: a MOVED reply on one split part is retried
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- The slot map is stale: 7001 owns every slot.
+            fake.topology = 3
+            fake.handler = function(self, cmd, ...)
+                if cmd ~= "mget" then
+                    return "OK"
+                end
+                if self._node == "127.0.0.1:7001" then
+                    -- The next CLUSTER SLOTS reports the real map.
+                    fake.topology = 1
+                    return false, "MOVED 12182 127.0.0.1:7003"
+                end
+                local keys = { ... }
+                local out = {}
+                for i = 1, #keys do
+                    out[i] = "v:" .. tostring(keys[i])
+                end
+                return out
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkMovedSplit",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:mget("z", "a")
+
+            local mgets = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "mget" then
+                    mgets = mgets + 1
+                end
+            end
+            ngx.say("values: ", table.concat(res or {}, ","), " err: ", tostring(err))
+            ngx.say("mgets: ", mgets)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+values: v:z,v:a err: nil
+mgets: 4
+--- no_error_log
+[error]
+
+=== TEST 19: an ASK reply on one split part is retried on the target node
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, ...)
+                if cmd == "asking" then
+                    return "OK"
+                end
+                if cmd ~= "mget" then
+                    return "OK"
+                end
+                if self._node == "127.0.0.1:7002" then
+                    return false, "ASK 8157 127.0.0.1:7001"
+                end
+                local keys = { ... }
+                local out = {}
+                for i = 1, #keys do
+                    out[i] = "v:" .. tostring(keys[i])
+                end
+                return out
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkAskSplit",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:mget("z", "a")
+
+            local asking = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "asking" then
+                    asking = asking + 1
+                end
+            end
+            ngx.say("values: ", table.concat(res or {}, ","), " err: ", tostring(err))
+            ngx.say("asking: ", asking)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+values: v:z,v:a err: nil
+asking: 1
+--- no_error_log
+[error]
+
