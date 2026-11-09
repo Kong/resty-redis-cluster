@@ -88,8 +88,8 @@ local multi_key_cmds = {
     sunion  = { keys = "all",     split = false },
     sdiff   = { keys = "all",     split = false },
     pfcount = { keys = "all",     split = false },
-    rename  = { keys = "all",     split = false },
-    smove   = { keys = "first2",  split = false },
+    rename  = { keys = "all",     split = false, args = 2 },
+    smove   = { keys = "first2",  split = false, args = 3 },
 }
 
 
@@ -1626,7 +1626,11 @@ local function collect_command_keys(cmd, spec, key, ...)
     local args = { key, ... }
     local step = spec.keys == "stride2" and 2 or 1
 
-    if nargs == 0 or nargs % step ~= 0 then
+    if spec.args then
+        if nargs ~= spec.args then
+            return nil, nil, "wrong number of arguments for '" .. cmd .. "' command"
+        end
+    elseif nargs == 0 or nargs % step ~= 0 then
         return nil, nil, "wrong number of arguments for '" .. cmd .. "' command"
     end
     for i = 1, nargs do

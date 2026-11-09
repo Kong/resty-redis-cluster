@@ -770,3 +770,54 @@ cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
 --- no_error_log
 [error]
 
+=== TEST 17: SMOVE and RENAME reject a wrong argument count
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                return 1
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkArgCount",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local _, smove2 = red:smove("{s}a", "{s}b")
+            local _, smove4 = red:smove("{s}a", "{s}b", "m", "extra")
+            local _, rename1 = red:rename("{s}a")
+            local _, rename3 = red:rename("{s}a", "{s}b", "{s}c")
+            local ok, smove_ok = red:smove("{s}a", "{s}b", "m")
+
+            local sent = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and (e.cmd == "smove" or e.cmd == "rename") then
+                    sent = sent + 1
+                end
+            end
+            ngx.say(tostring(smove2))
+            ngx.say(tostring(smove4))
+            ngx.say(tostring(rename1))
+            ngx.say(tostring(rename3))
+            ngx.say("ok: ", tostring(ok == 1 or ok), " sent: ", sent)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+wrong number of arguments for 'smove' command
+wrong number of arguments for 'smove' command
+wrong number of arguments for 'rename' command
+wrong number of arguments for 'rename' command
+ok: true sent: 1
+--- no_error_log
+[error]
+
