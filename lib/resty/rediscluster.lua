@@ -51,6 +51,9 @@ local DEFAULT_READ_TIMEOUT = 1000
 -- minutes. The first fetch has no bound: a client that cannot read the slots
 -- once cannot start at all.
 local DEFAULT_MAX_CONNECTION_TIMEOUT = 10000
+-- A failed scan refresh is skipped for this long. Two seconds is shorter than the
+-- usual sync interval, so one failure does not make the next tick skip as well.
+local SCAN_REFRESH_BACKOFF = 2
 
 local LEFT_BRACKET = "{"
 local RIGHT_BRACKET = "}"
@@ -68,6 +71,10 @@ local ask_ip_by_host = {}
 
 local slot_cache = {}
 local master_nodes = {}
+-- Time of the last failed refresh, for each cluster name. A failed scan refreshes
+-- at most once per window, so a cluster that is down does not cost one walk of
+-- the whole address list per call.
+local refresh_failed_at = {}
 
 local cmds_for_all_master = {
     ["flushall"] = true,
@@ -826,8 +833,12 @@ function _M.refresh_slots(self)
     })
     unlock(self, lock, "refreshing")
     if fetch_err then
+        ngx.update_time()
+        refresh_failed_at[self.config.name] = ngx.now()
         return nil, fetch_err
     end
+
+    refresh_failed_at[self.config.name] = nil
 end
 
 
@@ -1701,6 +1712,20 @@ end
 
 -- SCAN on one master. This path cannot use handle_command_with_retry, because
 -- that function uses the cursor as the routing key.
+-- Refresh from the scan path. A plain command must refresh at once, or recovery
+-- waits for the window; a scan runs on a timer, so one walk per window is enough.
+local function scan_refresh_slots(self)
+    ngx.update_time()
+    local now = ngx.now()
+    local last = refresh_failed_at[self.config.name]
+    if last and now - last < SCAN_REFRESH_BACKOFF then
+        return nil, "slot refresh is in backoff, retry later"
+    end
+
+    return self:refresh_slots()
+end
+
+
 local function scan_one_master(self, master, cursor, ...)
     local config = self.config
     local redis_client = redis:new()
@@ -1712,7 +1737,7 @@ local function scan_one_master(self, master, cursor, ...)
     if not ok then
         -- The cached master list can still name a node that failed over. Every
         -- other command path refreshes the slot cache on a connection error.
-        self:refresh_slots()
+        scan_refresh_slots(self)
         return nil, "failed to connect to " .. tostring(master.ip) .. ":" ..
                     tostring(master.port) .. ": " .. tostring(err)
     end
@@ -1726,7 +1751,7 @@ local function scan_one_master(self, master, cursor, ...)
     local res, scan_err = redis_client:scan(cursor, ...)
     if not res then
         redis_client:close()
-        self:refresh_slots()
+        scan_refresh_slots(self)
         return nil, scan_err
     end
 

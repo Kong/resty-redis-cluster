@@ -351,3 +351,113 @@ the first fetch passes no bound: true
 a refresh passes a bound: true
 --- no_error_log
 [alert]
+
+=== TEST 6: a failed refresh is retried once per window, not on every call
+A refresh that succeeds leaves the cache up to date, so it does not back off.
+A refresh that fails does: the whole cluster is unreachable, and every call
+would otherwise walk the address list again.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", {} }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllBackoff",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+            red:init_slots()
+
+            -- The whole cluster goes away, so the refresh itself fails.
+            fake.connect = function() return nil, "connection refused" end
+
+            -- Count the refresh attempts: a fetch that fails at connect records
+            -- no slot reply, so count the call instead.
+            local attempts = 0
+            local real_refresh = red.refresh_slots
+            red.refresh_slots = function(self)
+                attempts = attempts + 1
+                return real_refresh(self)
+            end
+
+            for i = 1, 5 do
+                red:scan_all("0", "COUNT", "10")
+            end
+
+            ngx.say("five failed calls ran a refresh: ", tostring(attempts > 0))
+            ngx.say("at most one per window: ", tostring(attempts <= 2))
+        ';
+    }
+--- request
+GET /t
+# This block exercises the failure path, which logs at error level by design.
+--- response_body
+five failed calls ran a refresh: true
+at most one per window: true
+--- no_error_log
+[alert]
+
+=== TEST 7: the window gates the scan path only
+A plain command must refresh at once. If the window also gated refresh_slots,
+a cluster that comes back would stay broken for the whole window.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", {} }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllScope",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+            red:init_slots()
+
+            -- Enter the window: the refresh fails.
+            fake.connect = function() return nil, "connection refused" end
+            red:scan_all("0", "COUNT", "10")
+
+            -- A direct refresh, which is what every plain command calls, must
+            -- still run inside the window.
+            fake.connect = nil
+            local fetches = 0
+            local real_fetch = red.fetch_slots
+            red.fetch_slots = function(self, opts)
+                fetches = fetches + 1
+                return real_fetch(self, opts)
+            end
+
+            red:refresh_slots()
+            ngx.say("a direct refresh runs inside the window: ", tostring(fetches > 0))
+        ';
+    }
+--- request
+GET /t
+# This block exercises the failure path, which logs at error level by design.
+--- response_body
+a direct refresh runs inside the window: true
+--- no_error_log
+[alert]
