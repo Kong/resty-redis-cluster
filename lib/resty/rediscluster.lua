@@ -1561,9 +1561,9 @@ local function split_sum_command(self, cmd, keys)
 end
 
 
--- Validate the arguments and return the keys that take part in the slot check,
--- plus the full argument list. A nil argument is an error: `{ ... }` truncates at
--- the first hole, so a length check on the table cannot see it.
+-- Validate the arguments and return the keys that take part in the slot check.
+-- A nil argument is an error: `{ ... }` truncates at the first hole, so a length
+-- check on the table cannot see it.
 local function collect_command_keys(cmd, spec, key, ...)
     local rest = select("#", ...)
     local nargs = key == nil and rest or rest + 1

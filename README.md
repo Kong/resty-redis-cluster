@@ -477,6 +477,19 @@ The cursor also carries a fingerprint of the master list. When the set of master
 the iteration, `scan_all` returns an error that starts with `scan cursor is stale` and asks you to
 start again from cursor `0`. A change in the order of the same masters does not affect the cursor.
 
+`scan_all` reads masters only. A replica can hold keys that its master does not have yet, and it
+can lag behind. Do not use `scan_all` to count keys for a migration decision.
+
+A retry can repeat a page. When one master fails, the call returns an error and does not keep the
+page. If the caller starts again with the same cursor, the keys of that page can appear twice. Drop
+duplicates if the result feeds a destructive step.
+
+A large keyspace takes many calls. A `MATCH` that finds few keys also takes many calls, because
+one call stops at 16 SCAN round trips even when it has found fewer keys than `COUNT`.
+
+`scan_all` sends the commands directly, so it does not use the `auth_providers` wrapper. A caller
+that rotates credentials during an iteration must call `scan_all` again with the new client.
+
 ### Limitation
 
 1. `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
@@ -498,7 +511,10 @@ start again from cursor `0`. A change in the order of the same masters does not 
 
 ### Compatibilty
 
-Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same suite on both versions. It leaves out only `t/z-recover.t`, which starts its own fixture.
+Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same suite on both
+versions. It leaves out `t/z-recover.t`, which starts its own fixture. It also leaves out
+`t/z-failover.t`, which stops a master and needs `Z_FAILOVER=1`; run it by hand against a local
+cluster.
 
 ### Changelog
 
@@ -507,7 +523,7 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same s
 1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`.
 2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`. `MSET` is not split, because a split `MSET` is not atomic.
 3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME` also returns an error.
-4. Add `scan_all()` to scan every master. One call is bounded, and its cursor carries a fingerprint of the master list.
+4. Add `scan_all()` to scan every master. It returns `{ cursor, keys }`, like `scan`. One call is bounded, and its cursor carries a fingerprint of the master list.
 5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.
 
 #### 1.7.0

@@ -734,7 +734,7 @@ keys are not a string: true
 [error]
 
 
-=== TEST 24: the cursor carries one crc32 of the sorted master list
+=== TEST 15: the cursor carries one crc32 of the sorted master list
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
