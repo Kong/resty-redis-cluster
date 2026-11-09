@@ -1226,3 +1226,145 @@ upper: nil command not supported
 shutdown commands sent: 0
 --- no_error_log
 [error]
+
+=== TEST 28: a MOVED reply on a split sum part is retried and still counted
+TEST 18 covers MOVED for mget. A sum command merges a number instead of a value
+list, so a redirect that loses a part shows up as a wrong count and nothing else.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- The slot map is stale: 7001 owns every slot.
+            fake.topology = 3
+            fake.handler = function(self, cmd)
+                if cmd ~= "del" then
+                    return "OK"
+                end
+                if self._node == "127.0.0.1:7001" then
+                    -- The next CLUSTER SLOTS reports the real map.
+                    fake.topology = 1
+                    return false, "MOVED 8157 127.0.0.1:7002"
+                end
+                return 1
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkDelMoved",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            -- "z" and "a" are in two slots, and both leave 7001 once the map is
+            -- fresh, so the retry of each part answers without a loop.
+            local res, err = red:del("z", "a")
+            ngx.say("count: ", tostring(res), " err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+count: 2 err: nil
+--- no_error_log
+[error]
+
+=== TEST 29: a part that is redirected still lands in its own position
+The reply array is rebuilt from the origin index of each part. A redirect on
+the middle part must not shift the other values.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- The middle master answers MOVED once, then serves the keys. One
+            -- redirect is enough to check the position of every part.
+            local redirected = false
+            fake.handler = function(self, cmd, ...)
+                if cmd ~= "mget" then
+                    return "OK"
+                end
+                if self._node == "127.0.0.1:7002" and not redirected then
+                    redirected = true
+                    return false, "MOVED 8157 127.0.0.1:7003"
+                end
+                local keys = { ... }
+                local out = {}
+                for i = 1, #keys do
+                    out[i] = "v:" .. tostring(keys[i])
+                end
+                return out
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkMovedMiddle",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            -- "b" is 7001, "z" is 7002 and "a" is 7003.
+            local res, err = red:mget("b", "z", "a")
+            ngx.say("values: ", table.concat(res or {}, ","), " err: ", tostring(err))
+        }
+    }
+--- request
+GET /t
+--- response_body
+values: v:b,v:z,v:a err: nil
+--- no_error_log
+[error]
+
+=== TEST 30: a queued command that is rejected does not take a result slot
+A cross-slot multi-key command is rejected when it is queued, so the result
+array is one shorter than the number of calls. A caller that ignores the return
+value of the queued call reads the next command's result.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, ...)
+                local keys = { ... }
+                local out = {}
+                for i = 1, #keys do
+                    out[i] = "v:" .. tostring(keys[i])
+                end
+                return out
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkPipelineShift",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            red:init_pipeline()
+            local rejected, reject_err = red:mget("b", "z")
+            red:mget("{s}a", "{s}b")
+            local results, err = red:commit_pipeline()
+
+            ngx.say("rejected: ", tostring(rejected), " ", tostring(reject_err))
+            ngx.say("results: ", results and #results or "nil", " err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+rejected: nil command 'mget' needs one slot inside a pipeline; call it directly or use a hash tag
+results: 1 err: nil
+--- no_error_log
+[error]
