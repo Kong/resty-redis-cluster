@@ -1865,19 +1865,18 @@ end
 
 
 --- Scan every master of the cluster.
--- Pass the same options on every call, as with the Redis SCAN command. Compare
--- the returned cursor with "0" to stop.
+-- Pass the same options on every call, as with the Redis SCAN command. The
+-- result has the same shape as the single-node `scan`: `{ cursor, keys }`.
 --
 -- One call is bounded: it returns after `COUNT` keys (default 100) or after 16
 -- SCAN round trips, whichever comes first. Call again until the cursor is "0".
 -- @tparam string|number cursor The cursor of the previous call, or "0" to start.
--- @treturn string|nil The next cursor. `"0"` ends the iteration.
--- @treturn table|nil The keys found in this call.
--- @treturn string|nil The error message. On a failure, the first two values are nil.
+-- @treturn table|nil `{ cursor, keys }`. `cursor` is `"0"` at the end.
+-- @treturn string|nil The error message. On a failure the first value is nil.
 function _M.scan_all(self, cursor, ...)
     local masters, err = scan_master_list(self)
     if not masters then
-        return nil, nil, err
+        return nil, err
     end
 
     local total = #masters
@@ -1890,17 +1889,17 @@ function _M.scan_all(self, cursor, ...)
         local i, seen_total, seen_fingerprint, node =
             string.match(tostring(cursor), SCAN_CURSOR_PATTERN)
         if not i then
-            return nil, nil, "invalid scan cursor: " .. tostring(cursor)
+            return nil, "invalid scan cursor: " .. tostring(cursor)
         end
 
         i, seen_total = tonumber(i), tonumber(seen_total)
         if seen_total ~= total or seen_fingerprint ~= fingerprint then
-            return nil, nil, "scan cursor is stale: the set of masters changed; " ..
-                        "restart with cursor 0"
+            return nil, "scan cursor is stale: the set of masters changed; " ..
+                       "restart with cursor 0"
         end
 
         if i < 1 or i > total then
-            return nil, nil, "invalid scan cursor: " .. tostring(cursor)
+            return nil, "invalid scan cursor: " .. tostring(cursor)
         end
 
         index, node_cursor = i, node
@@ -1914,7 +1913,7 @@ function _M.scan_all(self, cursor, ...)
         rounds = rounds + 1
         local res, scan_err = scan_one_master(self, masters[index], node_cursor, ...)
         if not res then
-            return nil, nil, scan_err
+            return nil, scan_err
         end
 
         node_cursor = tostring(res[1])
@@ -1934,10 +1933,10 @@ function _M.scan_all(self, cursor, ...)
     end
 
     if index > total then
-        return "0", keys, nil
+        return { "0", keys }, nil
     end
 
-    return index .. ":" .. total .. ":" .. fingerprint .. ":" .. node_cursor, keys, nil
+    return { index .. ":" .. total .. ":" .. fingerprint .. ":" .. node_cursor, keys }, nil
 end
 
 

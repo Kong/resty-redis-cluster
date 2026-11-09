@@ -50,7 +50,8 @@ __DATA__
                 lock_timeout = 1,
             }))
 
-            local cursor, keys, err = red:scan_all("0")
+            local res, err = red:scan_all("0")
+            local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -105,9 +106,12 @@ scans: 3
 
             local cursor = "0"
             local out = {}
+            local err
             for i = 1, 6 do
                 local keys
-                cursor, keys = red:scan_all(cursor, "COUNT", "1")
+                local page
+                page, err = red:scan_all(cursor, "COUNT", "1")
+                cursor, keys = page and page[1], page and page[2]
                 local index = cursor == "0" and "done" or cursor:match("^(%d+):")
                 out[#out + 1] = index .. ":" .. table.concat(keys or {}, "+")
                 if cursor == "0" then
@@ -154,7 +158,8 @@ GET /t
                 lock_timeout = 1,
             }))
 
-            local cursor, keys = red:scan_all("0")
+            local res = red:scan_all("0")
+            local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -246,7 +251,8 @@ args: 0,MATCH,p:*,COUNT,10 0,MATCH,p:*,COUNT,10 0,MATCH,p:*,COUNT,10
                 lock_timeout = 1,
             }))
 
-            local cursor, keys, err = red:scan_all("abc")
+            local res, err = red:scan_all("abc")
+            local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -291,7 +297,8 @@ scans: 0
                 lock_timeout = 1,
             }))
 
-            local cursor, keys, err = red:scan_all("1:3:0-0:0")
+            local res, err = red:scan_all("1:3:0-0:0")
+            local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -343,7 +350,8 @@ scans: 0
                 lock_timeout = 1,
             }))
 
-            local cursor, keys = red:scan_all("0")
+            local res = red:scan_all("0")
+            local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -385,7 +393,8 @@ keys: 100 scans: 10 done: false
                 lock_timeout = 1,
             }))
 
-            local cursor, keys = red:scan_all("0", "MATCH", "nothing:*")
+            local res = red:scan_all("0", "MATCH", "nothing:*")
+            local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -432,7 +441,8 @@ Version 6 lists the same three masters as version 1, in the opposite order.
                 lock_timeout = 1,
             }))
 
-            local cursor, keys = red:scan_all("0", "COUNT", "1")
+            local res = red:scan_all("0", "COUNT", "1")
+            local cursor, keys = res and res[1], res and res[2]
             ngx.say("first: ", table.concat(keys or {}, ","))
             ngx.say("index: ", cursor and cursor:match("^(%d+):") or "nil")
 
@@ -440,7 +450,8 @@ Version 6 lists the same three masters as version 1, in the opposite order.
             fake.topology = 6
             red:refresh_slots()
 
-            local cursor2, keys2, err2 = red:scan_all(cursor, "COUNT", "1")
+            local res2, err2 = red:scan_all(cursor, "COUNT", "1")
+            local cursor2, keys2 = res2 and res2[1], res2 and res2[2]
             ngx.say("err: ", tostring(err2))
             ngx.say("second: ", table.concat(keys2 or {}, ","))
         ';
@@ -483,13 +494,14 @@ Version 7 has three masters, but 7013 replaces 7003.
                 lock_timeout = 1,
             }))
 
-            local cursor = red:scan_all("0", "COUNT", "1")
+            local cursor = red:scan_all("0", "COUNT", "1")[1]
 
             -- Same count, but one master is replaced.
             fake.topology = 7
             red:refresh_slots()
 
-            local cursor2, keys2, err2 = red:scan_all(cursor, "COUNT", "1")
+            local res2, err2 = red:scan_all(cursor, "COUNT", "1")
+            local cursor2, keys2 = res2 and res2[1], res2 and res2[2]
             ngx.say("cursor: ", tostring(cursor2), " keys: ", tostring(keys2))
             ngx.say("err: ", tostring(err2))
         ';
@@ -546,7 +558,8 @@ err: scan cursor is stale: the set of masters changed; restart with cursor 0
             red:init_slots()
             local before = slot_fetches()
 
-            local c, keys, err = red:scan_all("0", "COUNT", "10")
+            local res, err = red:scan_all("0", "COUNT", "10")
+            local c = res and res[1]
             local after = slot_fetches()
 
             ngx.say("cursor: ", tostring(c))
@@ -608,7 +621,8 @@ slot cache refreshed: true
 
             -- Three masters fail on the first page, but the call returns on the
             -- first failure, so the cache is fetched once.
-            local c = red:scan_all("0", "COUNT", "10")
+            local res = red:scan_all("0", "COUNT", "10")
+            local c = res and res[1]
             local after = slot_fetches()
 
             ngx.say("cursor: ", tostring(c))
@@ -654,10 +668,11 @@ slot fetches in one call: 1
                 lock_timeout = 1,
             }))
 
-            local c1, k1, e1 = red:scan_all("0", "COUNT", "100")
+            local r1, e1 = red:scan_all("0", "COUNT", "100")
 
             dead = false
-            local c2, k2, e2 = red:scan_all("0", "COUNT", "100")
+            local r2, e2 = red:scan_all("0", "COUNT", "100")
+            local k2 = r2 and r2[2]
 
             ngx.say("first err: ", tostring(e1) ~= "nil")
             ngx.say("second err: ", tostring(e2))
@@ -670,6 +685,51 @@ GET /t
 first err: true
 second err: nil
 second keys: 3
+--- no_error_log
+[error]
+
+=== TEST 14: the result has the same shape as the single-node scan
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                return { "0", { "k1" } }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllShape",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            -- Exactly what a caller does today with resty.redis scan.
+            local res, err = red:scan_all("0", "COUNT", "10")
+            local cursor = res and res[1]
+            local keys = res and res[2] or {}
+
+            ngx.say("result is a table: ", tostring(type(res) == "table"))
+            ngx.say("cursor type: ", type(cursor))
+            ngx.say("keys: ", #keys, " err: ", tostring(err))
+            ngx.say("keys are not a string: ", tostring(type(keys) == "table"))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+result is a table: true
+cursor type: string
+keys: 3 err: nil
+keys are not a string: true
 --- no_error_log
 [error]
 

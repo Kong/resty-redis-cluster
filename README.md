@@ -456,21 +456,17 @@ each command that was queued, so a command that was rejected does not occupy a p
 argument. A plain `SCAN` therefore reads one master only. Use `scan_all` to read every master:
 
 ```lua
-local cursor, keys, err
-repeat
-    cursor, keys, err = red_c:scan_all(cursor or "0", "MATCH", "prefix:*", "COUNT", 1000)
-    if err then
-        return nil, err
-    end
-    for _, key in ipairs(keys) do
-        -- use the key
-    end
-until cursor == "0"
+local res, err = red_c:scan_all(cursor, "MATCH", "prefix:*", "COUNT", 1000)
+if not res then
+    return nil, err
+end
+local cursor, keys = res[1], res[2]
+-- use keys
 ```
 
-`scan_all` returns three values: the next cursor, the keys of this call, and an error. On a
-failure it returns `nil, nil, err`. The cursor is opaque; compare it with `"0"` to stop, and pass
-the same options on every call.
+`scan_all` returns the same shape as `scan`: `{ cursor, keys }, nil` on success and `nil, err` on
+failure. You can replace `scan` with `scan_all` and keep the rest of the loop. The cursor is
+opaque; compare it with `"0"` to stop, and pass the same options on every call.
 
 One call is bounded. It stops after `COUNT` keys (default 100) or after 16 SCAN round trips,
 whichever comes first, and returns a continuation cursor. A sparse `MATCH` therefore cannot scan

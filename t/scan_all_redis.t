@@ -58,14 +58,14 @@ __DATA__
             local cursor = "0"
             local seen = {}
             repeat
-                local keys, err
-                cursor, keys, err = red:scan_all(cursor, "MATCH", "scan:*", "COUNT", "3")
-                if not cursor then
+                local page, err = red:scan_all(cursor, "MATCH", "scan:*", "COUNT", "3")
+                if not page then
                     ngx.say("scan_all failed: ", tostring(err))
                     return
                 end
+                cursor = page[1]
 
-                for _, key in ipairs(keys) do
+                for _, key in ipairs(page[2]) do
                     seen[key] = (seen[key] or 0) + 1
                 end
             until cursor == "0"
@@ -118,7 +118,8 @@ duplicates: 0
 
             assert(red:flushall())
 
-            local cursor, keys, err = red:scan_all("0", "MATCH", "nothing:*")
+            local res, err = red:scan_all("0", "MATCH", "nothing:*")
+            local cursor, keys = res and res[1], res and res[2]
             ngx.say("cursor: ", tostring(cursor), " err: ", tostring(err))
             ngx.say("keys: ", keys and #keys or "nil")
         ';
@@ -162,7 +163,8 @@ keys: 0
                 assert(red:set("scan:" .. i, "v" .. i))
             end
 
-            local cursor, keys = red:scan_all("0", "MATCH", "scan:*", "COUNT", "1000")
+            local res = red:scan_all("0", "MATCH", "scan:*", "COUNT", "1000")
+            local cursor, keys = res and res[1], res and res[2]
             ngx.say("cursor: ", tostring(cursor))
             ngx.say("keys: ", keys and #keys or "nil")
         ';
