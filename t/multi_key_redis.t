@@ -3,12 +3,24 @@ use Cwd qw(cwd);
 
 repeat_each(1);
 
+plan tests => 3 * blocks();
+
+# The same fixture serves both modes: the auth mode only adds a credential to
+# the client config. "default" is the user that the fixture grants +@all.
 my $redis_auth = $ENV{REDIS_AUTH};
-if (defined($redis_auth) && $redis_auth eq "no") {
-    plan tests => 3 * blocks();
-} else {
-    plan(skip_all => "skip when REDIS_AUTH is enabled");
+my $auth_opts = "";
+if (defined($redis_auth) && $redis_auth eq "yes") {
+    $auth_opts = qq{                username = "default",\n                password = "kong",\n};
 }
+
+add_block_preprocessor(sub {
+    my $block = shift;
+    my $config = $block->config;
+    if (defined($config)) {
+        $config =~ s/__AUTH_OPTS__/$auth_opts/g;
+        $block->set_value("config", $config);
+    }
+});
 
 my $pwd = cwd();
 
@@ -48,7 +60,7 @@ __DATA__
                 read_timeout = 1000,
                 send_timeout = 1000,
                 max_redirection = 5,
-            }
+__AUTH_OPTS__            }
 
             local redis = require "resty.rediscluster"
             local red = assert(redis:new(config))
@@ -93,7 +105,7 @@ values: ["va","vb","vc","vb",null]
                 read_timeout = 1000,
                 send_timeout = 1000,
                 max_redirection = 5,
-            }
+__AUTH_OPTS__            }
 
             local redis = require "resty.rediscluster"
             local red = assert(redis:new(config))
@@ -139,7 +151,7 @@ exists after: 0
                 read_timeout = 1000,
                 send_timeout = 1000,
                 max_redirection = 5,
-            }
+__AUTH_OPTS__            }
 
             local redis = require "resty.rediscluster"
             local red = assert(redis:new(config))
@@ -188,7 +200,7 @@ values: null,null
                 read_timeout = 1000,
                 send_timeout = 1000,
                 max_redirection = 5,
-            }
+__AUTH_OPTS__            }
 
             local redis = require "resty.rediscluster"
             local red = assert(redis:new(config))
