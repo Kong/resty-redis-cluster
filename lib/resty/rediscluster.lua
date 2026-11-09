@@ -1947,6 +1947,9 @@ end
 
 
 --- Drop a pipeline that the caller started and abandoned.
+-- A multi-key command that spans slots is rejected when it is queued, so it does
+-- not add a request. Check the return value of every queued call: `commit_pipeline`
+-- returns one result for each request that was queued.
 -- Pooled connections stay open: the library releases each connection after its
 -- command.
 function _M.close(self)

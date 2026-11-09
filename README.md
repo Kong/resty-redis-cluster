@@ -437,8 +437,18 @@ A multi-key command inside a pipeline must use one slot. A command that spans sl
 error; call it directly, or use a hash tag. A command with a `nil` argument, or with an argument
 count that does not match the command, also returns an error.
 
+A command that is not in the tables above is sent the way it always was, so a cross-slot
+`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`,
+`ZUNIONSTORE` or `ZINTERSTORE` still returns `CROSSSLOT` from Redis.
+
 To keep related keys in one slot, use a hash tag. For example, `entitlement:{plugin-id}:subject`
 puts every key of one plugin instance in one slot.
+
+### Pipelines
+
+A multi-key command that spans slots is rejected when it is queued, so the caller must check the
+return value of each call that it adds to a pipeline. `commit_pipeline` returns one result for
+each command that was queued, so a command that was rejected does not occupy a position.
 
 ### Scanning the whole cluster
 
@@ -472,7 +482,7 @@ in the order of the same masters does not affect the cursor.
 
 ### Limitation
 
-1. `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots.
+1. `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
 
 2. Doesn't support transactions operations: MULTI DISCARD EXEC WATCH
 
@@ -499,8 +509,8 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same s
 
 1. Split `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A cross-slot `MSET` is not atomic.
 2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`.
-3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument or a wrong argument count also returns an error.
-4. Add `scan_all()` to scan every master.
+3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME` also returns an error.
+4. Add `scan_all()` to scan every master. One call is bounded, and its cursor carries a fingerprint of the master list.
 5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.
 
 #### 1.7.0
