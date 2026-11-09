@@ -245,14 +245,14 @@ args: 0,MATCH,p:*,COUNT,10 0,MATCH,p:*,COUNT,10 0,MATCH,p:*,COUNT,10
                 lock_timeout = 1,
             }))
 
-            local cursor, err = red:scan_all("abc")
+            local cursor, keys, err = red:scan_all("abc")
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
                     scans = scans + 1
                 end
             end
-            ngx.say("cursor: ", tostring(cursor))
+            ngx.say("cursor: ", tostring(cursor), " keys: ", tostring(keys))
             ngx.say("err: ", tostring(err))
             ngx.say("scans: ", scans)
         ';
@@ -260,7 +260,7 @@ args: 0,MATCH,p:*,COUNT,10 0,MATCH,p:*,COUNT,10 0,MATCH,p:*,COUNT,10
 --- request
 GET /t
 --- response_body
-cursor: nil
+cursor: nil keys: nil
 err: invalid scan cursor: abc
 scans: 0
 --- no_error_log
@@ -290,14 +290,14 @@ scans: 0
                 lock_timeout = 1,
             }))
 
-            local cursor, err = red:scan_all("1:5:0")
+            local cursor, keys, err = red:scan_all("1:5:0")
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
                     scans = scans + 1
                 end
             end
-            ngx.say("cursor: ", tostring(cursor))
+            ngx.say("cursor: ", tostring(cursor), " keys: ", tostring(keys))
             ngx.say("err: ", tostring(err))
             ngx.say("scans: ", scans)
         ';
@@ -305,7 +305,7 @@ scans: 0
 --- request
 GET /t
 --- response_body
-cursor: nil
+cursor: nil keys: nil
 err: scan cursor is stale: the cluster has 3 masters now and the cursor was made with 5; restart with cursor 0
 scans: 0
 --- no_error_log

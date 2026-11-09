@@ -446,20 +446,24 @@ puts every key of one plugin instance in one slot.
 argument. A plain `SCAN` therefore reads one master only. Use `scan_all` to read every master:
 
 ```lua
-local cursor = "0"
+local cursor, keys, err
 repeat
-    local keys
-    cursor, keys = red_c:scan_all(cursor, "MATCH", "prefix:*", "COUNT", 1000)
+    cursor, keys, err = red_c:scan_all(cursor or "0", "MATCH", "prefix:*", "COUNT", 1000)
+    if err then
+        return nil, err
+    end
     for _, key in ipairs(keys) do
         -- use the key
     end
 until cursor == "0"
 ```
 
-The cursor is opaque. Compare it with `"0"` to stop, and pass the same options on every call.
-`COUNT` limits the number of keys that one call returns, not the number of keys for each master.
-When the number of masters changes during the iteration, `scan_all` returns an error and asks you
-to start again from cursor `0`.
+`scan_all` returns three values: the next cursor, the keys of this call, and an error. On a
+failure it returns `nil, nil, err`. The cursor is opaque; compare it with `"0"` to stop, and pass
+the same options on every call.
+
+When the set of masters changes during the iteration, `scan_all` returns an error and asks you to
+start again from cursor `0`.
 
 ### Limitation
 

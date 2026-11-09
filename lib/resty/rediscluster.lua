@@ -1833,13 +1833,13 @@ end
 -- Pass the same options on every call, as with the Redis SCAN command. Compare
 -- the returned cursor with "0" to stop.
 -- @tparam string|number cursor The cursor of the previous call, or "0" to start.
--- @treturn string|nil The next cursor, or nil and an error.
+-- @treturn string|nil The next cursor. `"0"` ends the iteration.
 -- @treturn table|nil The keys found in this call.
--- @treturn string|nil The error message.
+-- @treturn string|nil The error message. On a failure, the first two values are nil.
 function _M.scan_all(self, cursor, ...)
     local masters, err = scan_master_list(self)
     if not masters then
-        return nil, err
+        return nil, nil, err
     end
 
     local total = #masters
@@ -1850,18 +1850,18 @@ function _M.scan_all(self, cursor, ...)
     else
         local i, seen_total, node = string.match(tostring(cursor), SCAN_CURSOR_PATTERN)
         if not i then
-            return nil, "invalid scan cursor: " .. tostring(cursor)
+            return nil, nil, "invalid scan cursor: " .. tostring(cursor)
         end
 
         i, seen_total = tonumber(i), tonumber(seen_total)
         if seen_total ~= total then
-            return nil, "scan cursor is stale: the cluster has " .. total ..
+            return nil, nil, "scan cursor is stale: the cluster has " .. total ..
                         " masters now and the cursor was made with " .. seen_total ..
                         "; restart with cursor 0"
         end
 
         if i < 1 or i > total then
-            return nil, "invalid scan cursor: " .. tostring(cursor)
+            return nil, nil, "invalid scan cursor: " .. tostring(cursor)
         end
 
         index, node_cursor = i, node
@@ -1873,7 +1873,7 @@ function _M.scan_all(self, cursor, ...)
     while index <= total do
         local res, scan_err = scan_one_master(self, masters[index], node_cursor, ...)
         if not res then
-            return nil, scan_err
+            return nil, nil, scan_err
         end
 
         node_cursor = tostring(res[1])
@@ -1893,10 +1893,10 @@ function _M.scan_all(self, cursor, ...)
     end
 
     if index > total then
-        return "0", keys
+        return "0", keys, nil
     end
 
-    return index .. ":" .. total .. ":" .. node_cursor, keys
+    return index .. ":" .. total .. ":" .. node_cursor, keys, nil
 end
 
 
