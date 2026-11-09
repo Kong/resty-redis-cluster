@@ -83,7 +83,8 @@ local config = {
     connect_timeout = 1000,                 --timeout while connecting
     lock_timeout = 5,                       --timeout acquiring resty lock
     max_redirection = 5,                    --maximum retry attempts for redirection
-    max_connection_attempts = 1             --maximum retry attempts for connection
+    max_connection_attempts = 1,            --maximum retry attempts for connection
+    max_connection_timeout = 10000          --upper bound for one refresh of the slot cache, in ms
 }
 
 local redis_cluster = require "rediscluster"
@@ -430,9 +431,17 @@ A command that cannot be split keeps its normal behavior when all of its keys sh
 | `MSET`, `MSETNX` | Sent unchanged | Returns an error |
 | `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `SMOVE` | Sent unchanged | Returns an error |
 
-Do not split `MSET`. A split `MSET` is not atomic, and an error on a later slot leaves the earlier
-slots written. To write several related keys, use a hash tag:
-`red_c:mset("{plugin-1}:a", 1, "{plugin-1}:b", 2)`.
+`MSET` is not split. A split `MSET` is not atomic, and an error on a later slot leaves the earlier
+slots written. A cross-slot `MSET` returns
+`command 'mset' needs all keys in one slot; use a hash tag or split the call`. To write several
+related keys, use a hash tag: `red_c:mset("{plugin-1}:a", 1, "{plugin-1}:b", 2)`.
+
+Earlier versions split `MSET` by slot and returned `OK`. A caller that relied on that must add a
+hash tag, or send one `MSET` for each slot and accept that a failure part way through leaves the
+earlier slots written.
+
+Command names are matched without regard to case: `red_c:DEL(...)` takes the same path as
+`red_c:del(...)`.
 
 A multi-key command inside a pipeline must use one slot. A command that spans slots returns an
 error; call it directly, or use a hash tag. A command with a `nil` argument, or with an argument
@@ -457,21 +466,27 @@ each command that was queued, so a command that was rejected does not occupy a p
 argument. A plain `SCAN` therefore reads one master only. Use `scan_all` to read every master:
 
 ```lua
+local cursor = "0"
 local res, err = red_c:scan_all(cursor, "MATCH", "prefix:*", "COUNT", 1000)
 if not res then
     return nil, err
 end
-local cursor, keys = res[1], res[2]
--- use keys
+cursor, keys = res[1], res[2]
+-- use keys, then call again until the cursor is "0"
 ```
 
 `scan_all` returns the same shape as `scan`: `{ cursor, keys }, nil` on success and `nil, err` on
 failure. You can replace `scan` with `scan_all` and keep the rest of the loop. The cursor is
 opaque; compare it with `"0"` to stop, and pass the same options on every call.
 
-One call is bounded. It stops after `COUNT` keys (default 100) or after 16 SCAN round trips,
-whichever comes first, and returns a continuation cursor. A sparse `MATCH` therefore cannot scan
-the whole keyspace in one call. Call again until the cursor is `"0"`.
+The options are read as pairs of a keyword and a value, as Redis reads them. `COUNT` must carry a
+number: `COUNT "abc"` returns an error instead of falling back to the default page size.
+
+One call is bounded. It stops after the SCAN page that takes the total to `COUNT` keys (default
+100), or after 16 SCAN round trips, whichever comes first, and returns a continuation cursor. A
+page from Redis can hold more keys than `COUNT` asks for, so one call can return more keys than
+`COUNT`. A sparse `MATCH` cannot scan the whole keyspace in one call. Call again until the cursor
+is `"0"`.
 
 The cursor also carries a fingerprint of the master list. When the set of masters changes during
 the iteration, `scan_all` returns an error that starts with `scan cursor is stale` and asks you to
@@ -492,7 +507,7 @@ that rotates credentials during an iteration must call `scan_all` again with the
 
 ### Limitation
 
-1. `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
+1. `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
 
 2. Doesn't support transactions operations: MULTI DISCARD EXEC WATCH
 
@@ -525,6 +540,9 @@ cluster.
 3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME` also returns an error.
 4. Add `scan_all()` to scan every master. It returns `{ cursor, keys }`, like `scan`. One call is bounded, and its cursor carries a fingerprint of the master list.
 5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.
+6. A refresh of the slot cache stops after `max_connection_timeout`, default 10 seconds. Before, a cluster that dropped packets could hold the caller for minutes.
+7. A failed refresh from `scan_all` is skipped for two seconds, so an outage does not walk the address list on every call. A plain command still refreshes at once.
+8. A command name is matched without regard to case, so `DEL` takes the same split path as `del`.
 
 #### 1.7.0
 
