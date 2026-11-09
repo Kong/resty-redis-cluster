@@ -3,22 +3,42 @@ use Cwd qw(cwd);
 
 repeat_each(1);
 
+# The same fixture serves both modes: the auth mode adds a credential to the
+# client config. "default" is the user that the fixture grants +@all.
+# Require the mode explicitly: an unset variable used to run the suite with no
+# credential and report failures that say nothing about the code.
+our $redis_auth = $ENV{REDIS_AUTH};
+if (!defined($redis_auth) || ($redis_auth ne "yes" && $redis_auth ne "no")) {
+    plan(skip_all => "set REDIS_AUTH to yes or no");
+}
+
+# One extra block proves the fixture mode: a client without a credential must be
+# rejected in the auth mode and accepted in the no-auth mode. Without it the auth
+# run can pass against a fixture that never checks the password, because Redis
+# accepts AUTH for a user with nopass.
 plan tests => 3 * blocks();
 
-# The same fixture serves both modes: the auth mode only adds a credential to
-# the client config. "default" is the user that the fixture grants +@all.
-my $redis_auth = $ENV{REDIS_AUTH};
 my $auth_opts = "";
-if (defined($redis_auth) && $redis_auth eq "yes") {
+if ($redis_auth eq "yes") {
     $auth_opts = qq{                username = "default",\n                password = "kong",\n};
 }
 
+# The detail line differs per mode, so assert only the first line.
+my $auth_mode_works = $redis_auth eq "yes" ? "false" : "true";
+
 add_block_preprocessor(sub {
     my $block = shift;
+
     my $config = $block->config;
     if (defined($config)) {
         $config =~ s/__AUTH_OPTS__/$auth_opts/g;
         $block->set_value("config", $config);
+    }
+
+    my $body = $block->response_body;
+    if (defined($body) && $body =~ /__AUTH_MODE_WORKS__/) {
+        $body =~ s/__AUTH_MODE_WORKS__/$auth_mode_works/;
+        $block->set_value("response_body", $body);
     }
 });
 
@@ -221,3 +241,54 @@ mset: OK nil
 values: ["1","2"]
 --- no_error_log
 [error]
+
+=== TEST 5: the fixture mode matches REDIS_AUTH
+A client without a credential must read a key in the no-auth mode and fail in
+the auth mode. This block is what makes the auth run meaningful: Redis accepts
+AUTH for a user with nopass, so a credential sent to a no-auth fixture is not
+an error there, and the rest of the suite would pass without checking anything.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local config = {
+                name = "mkRedisAuthMode",
+                serv_list = {
+                    { ip = "127.0.0.1", port = 6371 },
+                    { ip = "127.0.0.1", port = 6372 },
+                    { ip = "127.0.0.1", port = 6373 },
+                    { ip = "127.0.0.1", port = 6374 },
+                    { ip = "127.0.0.1", port = 6375 },
+                    { ip = "127.0.0.1", port = 6376 },
+                },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+                connect_timeout = 1000,
+                read_timeout = 1000,
+                send_timeout = 1000,
+                max_redirection = 5,
+            }
+
+            local redis = require "resty.rediscluster"
+            -- The client builds its slot cache in new(), so a rejected AUTH
+            -- fails there and not only on the first command.
+            local red, new_err = redis:new(config)
+            local works = false
+            if red then
+                local ok = red:mget("{probe}1", "{probe}2")
+                works = ok ~= nil and ok ~= false
+            end
+
+            -- One line only, so the expectation is an exact match in both modes.
+            ngx.log(ngx.INFO, "mode probe: ", tostring(new_err or "client created"))
+            ngx.say("unauthenticated read works: ", tostring(works))
+        }
+    }
+--- request
+GET /t
+# The auth mode logs the rejection at error level, so this block cannot assert
+# an empty error log. Assert that neither mode raises an alert.
+--- response_body
+unauthenticated read works: __AUTH_MODE_WORKS__
+--- no_error_log
+[alert]
