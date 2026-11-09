@@ -413,7 +413,198 @@ index: 1
 --- no_error_log
 [error]
 
-=== TEST 9: a reordered master list keeps the cursor valid
+=== TEST 9: a MATCH value that reads COUNT is a value, not the option
+The options are pairs of a keyword and a value. "COUNT" in the value slot of
+MATCH must not be read as the keyword.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- Ten keys on every page and a cursor that never ends: the budget
+            -- alone decides how many pages one call reads.
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                local next_cursor = tostring((tonumber(cursor) or 0) + 1)
+                local page = {}
+                for i = 1, 10 do
+                    page[i] = "k" .. next_cursor .. ":" .. i
+                end
+                return { next_cursor, page }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllMatchCount",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local function scans()
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == "cmd" and e.cmd == "scan" then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            local res = red:scan_all("0", "MATCH", "COUNT", "COUNT", "2")
+            ngx.say("keys: ", #res[2], " scans: ", scans())
+
+            fake.events = {}
+            local num = red:scan_all("0", "MATCH", "COUNT", "COUNT", 2)
+            ngx.say("numeric budget keys: ", #num[2], " scans: ", scans())
+        ';
+    }
+--- request
+GET /t
+--- response_body
+keys: 10 scans: 1
+numeric budget keys: 10 scans: 1
+--- no_error_log
+[error]
+
+=== TEST 10: a MATCH pattern that starts with COUNT is still a pattern
+"count*" is not the keyword COUNT, so the budget after it must be used. This
+is the control for TEST 9: the fix must not change a pattern that only looks
+similar.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                local next_cursor = tostring((tonumber(cursor) or 0) + 1)
+                local page = {}
+                for i = 1, 10 do
+                    page[i] = "count" .. next_cursor .. ":" .. i
+                end
+                return { next_cursor, page }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllCountPattern",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res = red:scan_all("0", "MATCH", "count*", "COUNT", "5")
+            local scans = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "scan" then
+                    scans = scans + 1
+                end
+            end
+            ngx.say("keys: ", #res[2], " scans: ", scans)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+keys: 10 scans: 1
+--- no_error_log
+[error]
+
+=== TEST 11: an unusable COUNT returns an error
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                return { "0", { "k" } }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllBadCount",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:scan_all("0", "MATCH", "k*", "COUNT", "abc")
+            ngx.say("res: ", tostring(res))
+            ngx.say("err: ", tostring(err))
+
+            local scans = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "scan" then
+                    scans = scans + 1
+                end
+            end
+            ngx.say("scans: ", scans)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res: nil
+err: COUNT needs a number, got abc
+scans: 0
+--- no_error_log
+[error]
+
+=== TEST 12: a COUNT without a value returns an error
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                return { "0", { "k" } }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllCountNoValue",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:scan_all("0", "COUNT", "abc")
+            ngx.say("res is nil: ", tostring(res == nil))
+            ngx.say("err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res is nil: true
+err: COUNT needs a number, got abc
+--- no_error_log
+[error]
+
+=== TEST 13: a reordered master list keeps the cursor valid
 Version 6 lists the same three masters as version 1, in the opposite order.
 --- http_config eval: $::HttpConfig
 --- config
@@ -466,7 +657,7 @@ second: 127.0.0.1:7001:last
 --- no_error_log
 [error]
 
-=== TEST 10: a changed master with the same count is rejected
+=== TEST 14: a changed master with the same count is rejected
 Version 7 has three masters, but 7013 replaces 7003.
 --- http_config eval: $::HttpConfig
 --- config
@@ -514,7 +705,7 @@ err: scan cursor is stale: the set of masters changed; restart with cursor 0
 --- no_error_log
 [error]
 
-=== TEST 11: a master that cannot be reached refreshes the slot cache
+=== TEST 15: a master that cannot be reached refreshes the slot cache
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -576,7 +767,7 @@ slot cache refreshed: true
 --- no_error_log
 [error]
 
-=== TEST 12: one failing call refreshes the slot cache once
+=== TEST 16: one failing call refreshes the slot cache once
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -637,7 +828,7 @@ slot fetches in one call: 1
 --- no_error_log
 [error]
 
-=== TEST 13: a later call succeeds after the failed one refreshed the cache
+=== TEST 17: a later call succeeds after the failed one refreshed the cache
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -688,7 +879,7 @@ second keys: 3
 --- no_error_log
 [error]
 
-=== TEST 14: the result has the same shape as the single-node scan
+=== TEST 18: the result has the same shape as the single-node scan
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -734,7 +925,7 @@ keys are not a string: true
 [error]
 
 
-=== TEST 15: the cursor carries one crc32 of the sorted master list
+=== TEST 19: the cursor carries one crc32 of the sorted master list
 --- http_config eval: $::HttpConfig
 --- config
     location /t {

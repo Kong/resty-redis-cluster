@@ -1723,13 +1723,31 @@ end
 
 
 -- Return the COUNT option of SCAN, so one call does not return the keys of many
--- masters at the same time.
+-- masters at the same time. The options are pairs of a keyword and a value, so
+-- walk them in pairs: a MATCH value that reads "COUNT" is a value, not a keyword.
+-- An unusable COUNT is an error: a silent fall back to the default page size
+-- hides a caller mistake.
 local function scan_count(...)
-    local args = { ... }
-    for i = 1, #args - 1 do
-        if type(args[i]) == "string" and string.upper(args[i]) == "COUNT" then
-            return tonumber(args[i + 1])
+    local total = select("#", ...)
+    local i = 1
+
+    while i + 1 <= total do
+        local option = select(i, ...)
+        if type(option) ~= "string" then
+            return nil
         end
+
+        local value = select(i + 1, ...)
+        if string.upper(option) == "COUNT" then
+            local count = tonumber(value)
+            if not count then
+                return nil, "COUNT needs a number, got " .. tostring(value)
+            end
+
+            return count
+        end
+
+        i = i + 2
     end
 end
 
@@ -1846,7 +1864,12 @@ function _M.scan_all(self, cursor, ...)
         index, node_cursor = i, node
     end
 
-    local budget = scan_count(...) or SCAN_ALL_DEFAULT_COUNT
+    local budget, budget_err = scan_count(...)
+    if budget_err then
+        return nil, budget_err
+    end
+    budget = budget or SCAN_ALL_DEFAULT_COUNT
+
     local keys = {}
     local rounds = 0
 
