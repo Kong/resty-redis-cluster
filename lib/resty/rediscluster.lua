@@ -82,7 +82,7 @@ local multi_key_cmds = {
     exists  = { keys = "all",     split = true,  combine = "sum"   },
     touch   = { keys = "all",     split = true,  combine = "sum"   },
 
-    mset    = { keys = "stride2", split = true,  combine = "status" },
+    mset    = { keys = "stride2", split = false },
     msetnx  = { keys = "stride2", split = false },
     sinter  = { keys = "all",     split = false },
     sunion  = { keys = "all",     split = false },
@@ -1564,62 +1564,6 @@ end
 -- Validate the arguments and return the keys that take part in the slot check,
 -- plus the full argument list. A nil argument is an error: `{ ... }` truncates at
 -- the first hole, so a length check on the table cannot see it.
--- MSET-like commands: the reply is a status. Send one part for each slot.
-local function split_status_command(self, cmd, args)
-    local groups, order = {}, {}
-    for i = 1, #args, 2 do
-        local slot = redis_slot(normalize_key(args[i]))
-        local group = groups[slot]
-        if not group then
-            group = new_tab(2, 0)
-            groups[slot] = group
-            order[#order + 1] = slot
-        end
-        group[#group + 1] = { key = args[i], value = args[i + 1] }
-    end
-
-    if #order == 1 then
-        return handle_command_with_retry(self, nil, nil, false, cmd, unpack(args))
-    end
-
-    local reqs = new_tab(#order, 0)
-    for i = 1, #order do
-        local group = groups[order[i]]
-        local rest = new_tab(#group * 2 - 1, 0)
-        rest[1] = group[1].value
-        local n = 1
-        for j = 2, #group do
-            n = n + 1
-            rest[n] = group[j].key
-            n = n + 1
-            rest[n] = group[j].value
-        end
-        reqs[i] = { cmd = cmd, key = group[1].key, args = rest }
-    end
-
-    ngx_log(NGX_DEBUG, "split ", cmd, ": ", #args / 2, " pairs in ", #order, " slots")
-
-    local results, err = run_requests(self, reqs)
-    if not results then
-        return nil, err
-    end
-
-    for i = 1, #order do
-        local part = results[i]
-        local part_err = pipeline_error(part)
-        if part_err then
-            return nil, cmd .. " failed for slot " .. order[i] .. ": " .. tostring(part_err)
-        end
-
-        if not part then
-            return nil, "unexpected " .. cmd .. " reply for slot " .. order[i]
-        end
-    end
-
-    return "OK"
-end
-
-
 local function collect_command_keys(cmd, spec, key, ...)
     local rest = select("#", ...)
     local nargs = key == nil and rest or rest + 1
@@ -1628,14 +1572,14 @@ local function collect_command_keys(cmd, spec, key, ...)
 
     if spec.args then
         if nargs ~= spec.args then
-            return nil, nil, "wrong number of arguments for '" .. cmd .. "' command"
+            return nil, "wrong number of arguments for '" .. cmd .. "' command"
         end
     elseif nargs == 0 or nargs % step ~= 0 then
-        return nil, nil, "wrong number of arguments for '" .. cmd .. "' command"
+        return nil, "wrong number of arguments for '" .. cmd .. "' command"
     end
     for i = 1, nargs do
         if args[i] == nil then
-            return nil, nil, "nil argument for '" .. cmd .. "' command"
+            return nil, "nil argument for '" .. cmd .. "' command"
         end
     end
 
@@ -1645,7 +1589,7 @@ local function collect_command_keys(cmd, spec, key, ...)
             keys[#keys + 1] = args[i]
         end
 
-        return keys, args
+        return keys
     end
 
     -- SMOVE takes two keys and a member.
@@ -1654,10 +1598,10 @@ local function collect_command_keys(cmd, spec, key, ...)
         keys[1] = args[1]
         keys[2] = args[2]
 
-        return keys, args
+        return keys
     end
 
-    return args, args
+    return args
 end
 
 
@@ -1799,10 +1743,9 @@ local function _do_cmd(self, cmd, key, ...)
     local spec = multi_key_cmds[cmd]
     local keys
 
-    local cmd_args
     if spec then
         local kerr
-        keys, cmd_args, kerr = collect_command_keys(cmd, spec, key, ...)
+        keys, kerr = collect_command_keys(cmd, spec, key, ...)
         if not keys then
             return nil, kerr
         end
@@ -1825,11 +1768,9 @@ local function _do_cmd(self, cmd, key, ...)
         if spec.split then
             if spec.combine == "array" then
                 return split_array_command(self, cmd, keys)
-            elseif spec.combine == "sum" then
-                return split_sum_command(self, cmd, keys)
             end
 
-            return split_status_command(self, cmd, cmd_args)
+            return split_sum_command(self, cmd, keys)
         end
 
         local ok, err = check_keys_in_one_slot(cmd, keys)

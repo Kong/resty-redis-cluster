@@ -586,54 +586,7 @@ sent: 1
 --- no_error_log
 [error]
 
-=== TEST 13: MSET splits the pairs by slot and sends them to the right nodes
---- http_config eval: $::HttpConfig
---- config
-    location /t {
-        content_by_lua '
-            local fake = require "fake_redis"
-            package.loaded["resty.redis"] = fake
-
-            fake.reset()
-            fake.handler = function(self, cmd)
-                return "OK"
-            end
-
-            local redis = require "resty.rediscluster"
-            local red = assert(redis:new({
-                name = "mkMsetSplit",
-                serv_list = { { ip = "127.0.0.1", port = 7001 } },
-                dict_name = "redis_cluster_slot_locks",
-                lock_timeout = 1,
-            }))
-
-            local res, err = red:mset("b", "1", "z", "2", "a", "3")
-
-            local cmds = {}
-            for _, e in ipairs(fake.events) do
-                if e.ev == "cmd" and e.cmd == "mset" then
-                    local args = {}
-                    for i = 1, #e.args do
-                        args[i] = tostring(e.args[i])
-                    end
-                    cmds[#cmds + 1] = e.node .. "=" .. table.concat(args, "+")
-                end
-            end
-            table.sort(cmds)
-
-            ngx.say("res: ", tostring(res), " err: ", tostring(err))
-            ngx.say("cmds: ", table.concat(cmds, " "))
-        ';
-    }
---- request
-GET /t
---- response_body
-res: OK err: nil
-cmds: 127.0.0.1:7001=b+1 127.0.0.1:7002=z+2 127.0.0.1:7003=a+3
---- no_error_log
-[error]
-
-=== TEST 14: MSET with an odd number of arguments returns an error
+=== TEST 13: MSET with an odd number of arguments returns an error
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -674,7 +627,51 @@ sent: 0
 --- no_error_log
 [error]
 
-=== TEST 15: a nil argument returns an error
+=== TEST 14: a cross-slot MSET is rejected and writes nothing
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkMsetGuard",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:mset("b", "1", "z", "2")
+            local same, same_err = red:mset("{s}a", "1", "{s}b", "2")
+
+            local sent = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "mset" then
+                    sent = sent + 1
+                end
+            end
+            ngx.say("cross: ", tostring(res), " ", tostring(err))
+            ngx.say("same: ", tostring(same), " ", tostring(same_err))
+            ngx.say("sent: ", sent)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+cross: nil command 'mset' needs all keys in one slot; use a hash tag or split the call
+same: OK nil
+sent: 1
+--- no_error_log
+[error]
+
+=== TEST 16: a nil argument returns an error
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -715,7 +712,7 @@ sent: 0
 --- no_error_log
 [error]
 
-=== TEST 16: a repeated key keeps its value and its position
+=== TEST 17: a repeated key keeps its value and its position
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -770,7 +767,7 @@ cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
 --- no_error_log
 [error]
 
-=== TEST 17: SMOVE and RENAME reject a wrong argument count
+=== TEST 18: SMOVE and RENAME reject a wrong argument count
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -821,7 +818,7 @@ ok: true sent: 1
 --- no_error_log
 [error]
 
-=== TEST 18: a MOVED reply on one split part is retried
+=== TEST 19: a MOVED reply on one split part is retried
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -877,7 +874,7 @@ mgets: 4
 --- no_error_log
 [error]
 
-=== TEST 19: an ASK reply on one split part is retried on the target node
+=== TEST 20: an ASK reply on one split part is retried on the target node
 --- http_config eval: $::HttpConfig
 --- config
     location /t {

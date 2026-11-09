@@ -421,17 +421,18 @@ are in different slots. The client sends one part for each slot, then combines t
 | Command | Result |
 | --- | --- |
 | `MGET` | The values, in the order of the keys |
-| `MSET` | `OK`, after every part succeeds |
 | `DEL`, `UNLINK`, `EXISTS`, `TOUCH` | The sum of the counts |
-
-A cross-slot `MSET` is not atomic. An error on a later slot can leave the earlier slots written.
 
 A command that cannot be split keeps its normal behavior when all of its keys share a slot:
 
 | Command | Keys in one slot | Keys in different slots |
 | --- | --- | --- |
-| `MSETNX` | Sent unchanged | Returns an error |
+| `MSET`, `MSETNX` | Sent unchanged | Returns an error |
 | `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `SMOVE` | Sent unchanged | Returns an error |
+
+Do not split `MSET`. A split `MSET` is not atomic, and an error on a later slot leaves the earlier
+slots written. To write several related keys, use a hash tag:
+`red_c:mset("{plugin-1}:a", 1, "{plugin-1}:b", 2)`.
 
 A multi-key command inside a pipeline must use one slot. A command that spans slots returns an
 error; call it directly, or use a hash tag. A command with a `nil` argument, or with an argument
@@ -503,8 +504,8 @@ Currently, this library is tested with Redis `6.2` and `7.2`. CI runs the same s
 
 #### Unreleased
 
-1. Split `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A cross-slot `MSET` is not atomic.
-2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`.
+1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`.
+2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`. `MSET` is not split, because a split `MSET` is not atomic.
 3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME` also returns an error.
 4. Add `scan_all()` to scan every master. One call is bounded, and its cursor carries a fingerprint of the master list.
 5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.

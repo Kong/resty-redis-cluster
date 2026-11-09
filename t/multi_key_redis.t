@@ -118,7 +118,7 @@ exists after: 0
 --- no_error_log
 [error]
 
-=== TEST 3: MSET with keys in different slots writes every key
+=== TEST 3: a cross-slot MSET is rejected and writes nothing
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -150,15 +150,18 @@ exists after: 0
             local va = red:get("mk:a")
             local vb = red:get("mk:b")
 
+            local function show(v)
+                return v == ngx.null and "null" or tostring(v)
+            end
             ngx.say("mset: ", tostring(ok), " ", tostring(err))
-            ngx.say("values: ", tostring(va), ",", tostring(vb))
+            ngx.say("values: ", show(va), ",", show(vb))
         ';
     }
 --- request
 GET /t
 --- response_body
-mset: OK nil
-values: 1,2
+mset: nil command 'mset' needs all keys in one slot; use a hash tag or split the call
+values: null,null
 --- no_error_log
 [error]
 
