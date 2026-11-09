@@ -208,3 +208,146 @@ fetches in first call: 1
 fetches in second call: 1
 --- no_error_log
 [error]
+
+=== TEST 4: a failed refresh stops at the time bound, not after every address
+The fake client refuses at once, so this cannot measure seconds. It measures
+the behavior that makes the bound work: the walk over the address list stops
+early, and the error names the bound.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", {} }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllRefreshBound",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+            red:init_slots()
+
+            -- Fill the cached address list with nodes that do not answer, so a
+            -- refresh has to walk all of them. The elapsed time crosses the
+            -- bound after the first attempt.
+            fake.connect = function(self, host, port)
+                self._node = host .. ":" .. tostring(port)
+                -- Move the clock past the bound on the first attempt.
+                ngx.sleep(0.02)
+                return nil, "timeout"
+            end
+
+            local function connects()
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == "connect" then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            -- Without a bound the walk tries every address three times.
+            red.config.max_connection_timeout = nil
+            fake.events = {}
+            red:refresh_slots()
+            local unbounded = connects()
+
+            -- With a bound of 1 ms it stops after the first attempt.
+            red.config.max_connection_timeout = 1
+            fake.events = {}
+            local ok, err = red:refresh_slots()
+            local bounded = connects()
+
+            ngx.say("the unbounded walk tried more than one address: ",
+                    tostring(unbounded > 1))
+            ngx.say("the bounded walk stopped earlier: ",
+                    tostring(bounded < unbounded))
+            ngx.say("refresh ok: ", tostring(ok ~= nil))
+            ngx.say("err names the bound: ",
+                    tostring(tostring(err):find("max_connection_timeout", 1, true) ~= nil))
+        ';
+    }
+--- request
+GET /t
+# This block exercises the failure path, which logs at error level by design.
+--- response_body
+the unbounded walk tried more than one address: true
+the bounded walk stopped earlier: true
+refresh ok: false
+err names the bound: true
+--- no_error_log
+[alert]
+
+=== TEST 5: a refresh passes a bound even when the caller sets none
+The default is what protects a caller that never sets max_connection_timeout,
+which is every caller today. Assert the value reaches fetch_slots, so a change
+that drops the default fails here. The first fetch must stay unbounded: a
+client that cannot read the slots once cannot start at all.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", {} }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+
+            -- new() runs the first fetch, so record what it passes there.
+            local init_opts, init_called = nil, false
+            local real_fetch = redis.fetch_slots
+            redis.fetch_slots = function(self, opts)
+                init_called = true
+                init_opts = opts and opts.max_connection_timeout
+                return real_fetch(self, opts)
+            end
+
+            local red = assert(redis:new({
+                name = "scanAllRefreshDefault",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            redis.fetch_slots = real_fetch
+
+            -- Now record what a refresh passes down.
+            local refresh_opts
+            red.fetch_slots = function(self, opts)
+                refresh_opts = opts and opts.max_connection_timeout
+                return nil, "stopped by the test"
+            end
+            red:refresh_slots()
+
+            ngx.say("the first fetch ran: ", tostring(init_called))
+            ngx.say("the first fetch passes no bound: ", tostring(init_opts == nil))
+            ngx.say("a refresh passes a bound: ", tostring(type(refresh_opts) == "number"))
+        ';
+    }
+--- request
+GET /t
+# This block exercises the failure path, which logs at error level by design.
+--- response_body
+the first fetch ran: true
+the first fetch passes no bound: true
+a refresh passes a bound: true
+--- no_error_log
+[alert]

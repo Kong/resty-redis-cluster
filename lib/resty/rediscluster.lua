@@ -43,6 +43,14 @@ local DEFAULT_KEEPALIVE_CONS = 1000
 local DEFAULT_CONNECTION_TIMEOUT = 1000
 local DEFAULT_SEND_TIMEOUT = 1000
 local DEFAULT_READ_TIMEOUT = 1000
+-- Upper bound for one refresh of the slot cache. A refresh walks every address
+-- with three connect attempts each, and a network that drops packets costs the
+-- full connect timeout per attempt. A Redis 7 cluster that announces hostnames
+-- lists an IP and a hostname per node, so a six node cluster has twelve
+-- addresses. Bound the walk so one failed refresh cannot hold the caller for
+-- minutes. The first fetch has no bound: a client that cannot read the slots
+-- once cannot start at all.
+local DEFAULT_MAX_CONNECTION_TIMEOUT = 10000
 
 local LEFT_BRACKET = "{"
 local RIGHT_BRACKET = "}"
@@ -640,10 +648,11 @@ local function check_auth_with_retry(self, redis_client)
 end
 
 
-local function try_hosts_slots(self, serv_list)
+local function try_hosts_slots(self, serv_list, max_connection_timeout)
     local start_time = ngx.now()
     local errors = {}
     local config = self.config
+    local timeout = max_connection_timeout or config.max_connection_timeout
     if #serv_list < 1 then
         return nil, "failed to fetch slots, serv_list config is empty"
     end
@@ -666,10 +675,9 @@ local function try_hosts_slots(self, serv_list)
             ngx_log(NGX_ERR, "unable to connect ip:port ", ip, ":", port, ", attempt ", k, ", error: ", err)
             table_insert(errors, err)
 
-            -- Kong currently does not configure 'max_connection_timeout'
             local total_connection_time_ms = (ngx.now() - start_time) * 1000
-            if (config.max_connection_timeout and total_connection_time_ms > config.max_connection_timeout) then
-                max_connection_timeout_err = "max_connection_timeout of " .. config.max_connection_timeout .. "ms reached."
+            if timeout and total_connection_time_ms > timeout then
+                max_connection_timeout_err = "max_connection_timeout of " .. timeout .. "ms reached."
                 ngx_log(NGX_ERR, max_connection_timeout_err)
                 table_insert(errors, max_connection_timeout_err)
                 return nil, errors
@@ -731,7 +739,9 @@ local function try_hosts_slots(self, serv_list)
 end
 
 
-function _M.fetch_slots(self)
+-- `opts.max_connection_timeout` bounds the whole walk over the address list.
+-- A refresh passes one; the first fetch leaves it nil.
+function _M.fetch_slots(self, opts)
     local serv_list = self.config.serv_list
     local serv_list_cached = slot_cache[self.config.name .. "serv_list"]
 
@@ -761,7 +771,8 @@ function _M.fetch_slots(self)
     -- important!
     serv_list_cached = nil -- luacheck: ignore
 
-    local _, errors = try_hosts_slots(self, serv_list_combined)
+    local _, errors = try_hosts_slots(self, serv_list_combined,
+                                      opts and opts.max_connection_timeout)
     if errors then
         local err = "failed to fetch slots: " .. table_concat(errors, ";")
         ngx_log(NGX_ERR, err)
@@ -809,7 +820,10 @@ function _M.refresh_slots(self)
         return nil,  err
     end
 
-    local _, fetch_err = self:fetch_slots()
+    local _, fetch_err = self:fetch_slots({
+        max_connection_timeout = self.config.max_connection_timeout
+                                 or DEFAULT_MAX_CONNECTION_TIMEOUT,
+    })
     unlock(self, lock, "refreshing")
     if fetch_err then
         return nil, fetch_err
