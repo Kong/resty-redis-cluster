@@ -461,3 +461,104 @@ GET /t
 a direct refresh runs inside the window: true
 --- no_error_log
 [alert]
+
+=== TEST 8: a master that NODES marks as failed is not scanned
+This is the state right after a failover. CLUSTER SLOTS reports the promoted
+node in place of the dead master, while CLUSTER NODES still lists the old
+master with the fail flag. scan_all must follow the slot map: the master list
+comes from CLUSTER SLOTS, not from CLUSTER NODES.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- 7013 took the slots of 7002. 7002 is still a master in NODES,
+            -- but it carries the fail flag and answers nothing.
+            fake.nodes = table.concat({
+                "id1 127.0.0.1:7001@17001 master - 0 0 1 connected 0-5460",
+                "id2 127.0.0.1:7002@17002 master,fail - 0 0 2 disconnected",
+                "id3 127.0.0.1:7003@17003 master - 0 0 3 connected 10923-16383",
+                "id9 127.0.0.1:7013@17013 master - 0 0 4 connected 5461-10922",
+            }, "\n") .. "\n"
+
+            -- The slot map also changes: 7013 owns 5461-10922.
+            fake.cluster = function(sub)
+                if sub ~= "slots" then
+                    return nil
+                end
+                return {
+                    { 0, 5460,      { "127.0.0.1", 7001, "id1" } },
+                    { 5461, 10922,  { "127.0.0.1", 7013, "id9" } },
+                    { 10923, 16383, { "127.0.0.1", 7003, "id3" } },
+                }
+            end
+
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", { self._node } }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllFailedNode",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:scan_all("0", "COUNT", "100")
+            local scanned = {}
+            for _, key in ipairs(res and res[2] or {}) do
+                scanned[key] = true
+            end
+
+            ngx.say("err: ", tostring(err))
+            ngx.say("visited 7001: ", tostring(scanned["127.0.0.1:7001"] ~= nil))
+            ngx.say("visited 7013: ", tostring(scanned["127.0.0.1:7013"] ~= nil))
+            ngx.say("visited the failed 7002: ", tostring(scanned["127.0.0.1:7002"] ~= nil))
+        }
+    }
+--- request
+GET /t
+--- response_body
+err: nil
+visited 7001: true
+visited 7013: true
+visited the failed 7002: false
+--- no_error_log
+[error]
+
+=== TEST 9: reset clears the hooks a block installs
+A hook that survives into the next block makes a later test fail for a reason
+that has nothing to do with its code. Test::Nginx shuffles blocks, so this is
+a trap rather than a predictable failure.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local fake = require "fake_redis"
+
+            fake.reset()
+            fake.connect = function() return nil, "refused" end
+            fake.cluster = function() return nil end
+            fake.nodes = "override"
+
+            fake.reset()
+            ngx.say("connect cleared: ", tostring(fake.connect == nil))
+            ngx.say("cluster cleared: ", tostring(fake.cluster == nil))
+            ngx.say("nodes cleared: ", tostring(fake.nodes == nil))
+        }
+    }
+--- request
+GET /t
+--- response_body
+connect cleared: true
+cluster cleared: true
+nodes cleared: true
+--- no_error_log
+[error]

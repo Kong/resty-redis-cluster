@@ -14,9 +14,11 @@ end
 
 function M.reset()
     M.events = {}
-    M.nodes = {}
+    M.nodes = nil
     M.topology = 1
     M.handler = nil
+    M.connect = nil
+    M.cluster = nil
     M.next_id = 0
 end
 
@@ -85,11 +87,24 @@ end
 
 local topologies = { slots_v1, slots_v2, slots_v3, slots_v4, slots_v5, slots_v6, slots_v7 }
 
-local NODES = table.concat({
-    "id1 127.0.0.1:7001@17001 master - 0 0 1 connected 0-5460",
-    "id2 127.0.0.1:7002@17002 master - 0 0 2 connected 5461-10922",
-    "id3 127.0.0.1:7003@17003 master - 0 0 3 connected 10923-16383",
-}, "\n") .. "\n"
+-- The NODES reply of each topology. Version 1 is the default. A test can also
+-- set M.nodes to override it, which is the only way to express a state that
+-- CLUSTER NODES and CLUSTER SLOTS disagree on.
+local node_replies = {
+    [1] = table.concat({
+        "id1 127.0.0.1:7001@17001 master - 0 0 1 connected 0-5460",
+        "id2 127.0.0.1:7002@17002 master - 0 0 2 connected 5461-10922",
+        "id3 127.0.0.1:7003@17003 master - 0 0 3 connected 10923-16383",
+    }, "\n") .. "\n",
+}
+
+local function nodes_reply()
+    if M.nodes then
+        return M.nodes
+    end
+
+    return node_replies[M.topology] or node_replies[1]
+end
 
 local methods = {}
 
@@ -125,10 +140,20 @@ function methods.close(self)
 end
 
 function methods.cluster(self, sub)
+    if M.cluster then
+        local reply = M.cluster(sub)
+        if reply ~= nil then
+            if sub == "slots" then
+                record({ ev = "cluster-slots", id = self._id, node = self._node, topology = M.topology })
+            end
+            return reply
+        end
+    end
+
     if sub == "info" then
         return "cluster_state:ok\r\ncluster_slots_assigned:16384\r\n"
     elseif sub == "nodes" then
-        return NODES
+        return nodes_reply()
     elseif sub == "slots" then
         record({ ev = "cluster-slots", id = self._id, node = self._node, topology = M.topology })
         return topologies[M.topology]()
