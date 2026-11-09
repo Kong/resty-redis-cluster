@@ -462,8 +462,13 @@ until cursor == "0"
 failure it returns `nil, nil, err`. The cursor is opaque; compare it with `"0"` to stop, and pass
 the same options on every call.
 
-When the set of masters changes during the iteration, `scan_all` returns an error and asks you to
-start again from cursor `0`.
+One call is bounded. It stops after `COUNT` keys (default 100) or after 16 SCAN round trips,
+whichever comes first, and returns a continuation cursor. A sparse `MATCH` therefore cannot scan
+the whole keyspace in one call. Call again until the cursor is `"0"`.
+
+The cursor also carries a fingerprint of the master list. When the set of masters changes during
+the iteration, `scan_all` returns an error and asks you to start again from cursor `0`. A change
+in the order of the same masters does not affect the cursor.
 
 ### Limitation
 

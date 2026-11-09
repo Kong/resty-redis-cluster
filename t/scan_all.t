@@ -108,7 +108,8 @@ scans: 3
             for i = 1, 6 do
                 local keys
                 cursor, keys = red:scan_all(cursor, "COUNT", "1")
-                out[#out + 1] = cursor .. ":" .. table.concat(keys or {}, "+")
+                local index = cursor == "0" and "done" or cursor:match("^(%d+):")
+                out[#out + 1] = index .. ":" .. table.concat(keys or {}, "+")
                 if cursor == "0" then
                     break
                 end
@@ -119,7 +120,7 @@ scans: 3
 --- request
 GET /t
 --- response_body
-1:3:7:k1 2:3:0:k2 3:3:0:k3 0:k4
+1:k1 2:k2 3:k3 done:k4
 --- no_error_log
 [error]
 
@@ -266,7 +267,7 @@ scans: 0
 --- no_error_log
 [error]
 
-=== TEST 6: a cursor from a cluster with another master count is rejected
+=== TEST 6: a cursor with another master fingerprint is rejected
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -290,7 +291,7 @@ scans: 0
                 lock_timeout = 1,
             }))
 
-            local cursor, keys, err = red:scan_all("1:5:0")
+            local cursor, keys, err = red:scan_all("1:3:0-0:0")
             local scans = 0
             for _, e in ipairs(fake.events) do
                 if e.ev == "cmd" and e.cmd == "scan" then
@@ -306,7 +307,198 @@ scans: 0
 GET /t
 --- response_body
 cursor: nil keys: nil
-err: scan cursor is stale: the cluster has 3 masters now and the cursor was made with 5; restart with cursor 0
+err: scan cursor is stale: the set of masters changed; restart with cursor 0
 scans: 0
 --- no_error_log
 [error]
+
+=== TEST 7: without COUNT one call stops at the default key budget
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- Every SCAN returns ten keys and a non-zero cursor: without a cap,
+            -- this would walk the whole keyspace in one call.
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                local next_cursor = tostring((tonumber(cursor) or 0) + 1)
+                local page = {}
+                for i = 1, 10 do
+                    page[i] = self._node .. ":" .. next_cursor .. ":" .. i
+                end
+                return { next_cursor, page }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllBudget",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local cursor, keys = red:scan_all("0")
+            local scans = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "scan" then
+                    scans = scans + 1
+                end
+            end
+            ngx.say("keys: ", #keys, " scans: ", scans, " done: ", tostring(cursor == "0"))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+keys: 100 scans: 10 done: false
+--- no_error_log
+[error]
+
+=== TEST 8: a sparse MATCH stops at the round-trip cap
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- No key ever matches, and the cursor never returns to 0.
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                return { "42", {} }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllSparse",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local cursor, keys = red:scan_all("0", "MATCH", "nothing:*")
+            local scans = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "scan" then
+                    scans = scans + 1
+                end
+            end
+            ngx.say("keys: ", #keys, " scans: ", scans, " done: ", tostring(cursor == "0"))
+            ngx.say("index: ", cursor and cursor:match("^(%d+):") or "nil")
+        ';
+    }
+--- request
+GET /t
+--- response_body
+keys: 0 scans: 16 done: false
+index: 1
+--- no_error_log
+[error]
+
+=== TEST 9: a reordered master list keeps the cursor valid
+Version 6 lists the same three masters as version 1, in the opposite order.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                if cursor == "0" then
+                    return { "7", { self._node .. ":first" } }
+                end
+                return { "0", { self._node .. ":last" } }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllReorder",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local cursor, keys = red:scan_all("0", "COUNT", "1")
+            ngx.say("first: ", table.concat(keys or {}, ","))
+            ngx.say("index: ", cursor and cursor:match("^(%d+):") or "nil")
+
+            -- The slot map now reports the same masters in another order.
+            fake.topology = 6
+            red:refresh_slots()
+
+            local cursor2, keys2, err2 = red:scan_all(cursor, "COUNT", "1")
+            ngx.say("err: ", tostring(err2))
+            ngx.say("second: ", table.concat(keys2 or {}, ","))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+first: 127.0.0.1:7001:first
+index: 1
+err: nil
+second: 127.0.0.1:7001:last
+--- no_error_log
+[error]
+
+=== TEST 10: a changed master with the same count is rejected
+Version 7 has three masters, but 7013 replaces 7003.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                if cursor == "0" then
+                    return { "7", { self._node .. ":first" } }
+                end
+                return { "0", {} }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllReplace",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local cursor = red:scan_all("0", "COUNT", "1")
+
+            -- Same count, but one master is replaced.
+            fake.topology = 7
+            red:refresh_slots()
+
+            local cursor2, keys2, err2 = red:scan_all(cursor, "COUNT", "1")
+            ngx.say("cursor: ", tostring(cursor2), " keys: ", tostring(keys2))
+            ngx.say("err: ", tostring(err2))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+cursor: nil keys: nil
+err: scan cursor is stale: the set of masters changed; restart with cursor 0
+--- no_error_log
+[error]
+

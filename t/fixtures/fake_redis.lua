@@ -65,7 +65,25 @@ local function slots_v5()
     }
 end
 
-local topologies = { slots_v1, slots_v2, slots_v3, slots_v4, slots_v5 }
+-- Version 6: the same three masters as version 1, in the opposite order.
+local function slots_v6()
+    return {
+        { 10923, 16383, { "127.0.0.1", 7003, "id3" } },
+        { 5461, 10922,  { "127.0.0.1", 7002, "id2" } },
+        { 0, 5460,      { "127.0.0.1", 7001, "id1" } },
+    }
+end
+
+-- Version 7: the same three masters as version 1, but 7003 is replaced by 7013.
+local function slots_v7()
+    return {
+        { 0, 5460,      { "127.0.0.1", 7001, "id1" } },
+        { 5461, 10922,  { "127.0.0.1", 7002, "id2" } },
+        { 10923, 16383, { "127.0.0.1", 7013, "id9" } },
+    }
+end
+
+local topologies = { slots_v1, slots_v2, slots_v3, slots_v4, slots_v5, slots_v6, slots_v7 }
 
 local NODES = table.concat({
     "id1 127.0.0.1:7001@17001 master - 0 0 1 connected 0-5460",

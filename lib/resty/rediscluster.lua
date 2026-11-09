@@ -1675,10 +1675,16 @@ local function check_keys_in_one_slot(cmd, keys)
 end
 
 
--- A cluster-wide SCAN uses a cursor with three parts: the index of the master to
--- visit, the number of masters seen when the iteration started, and the cursor of
--- that master. "0" means that the whole iteration is complete.
-local SCAN_CURSOR_PATTERN = "^(%d+):(%d+):(%d+)$"
+-- A cluster-wide SCAN uses a cursor with four parts: the index of the master to
+-- visit, the number of masters seen when the iteration started, a fingerprint of
+-- that master list, and the cursor of that master. "0" means that the whole
+-- iteration is complete.
+local SCAN_CURSOR_PATTERN = "^(%d+):(%d+):([%d%-]+):(%d+)$"
+
+-- One scan_all call stops when it reaches the key budget or the round-trip cap,
+-- whichever comes first, so a sparse MATCH cannot scan the whole keyspace.
+local SCAN_ALL_DEFAULT_COUNT = 100
+local SCAN_ALL_MAX_ROUNDS = 16
 
 
 local function scan_master_list(self)
@@ -1707,7 +1713,28 @@ local function scan_master_list(self)
         end
     end
 
+    -- Sort by address. The index in a cursor keeps its meaning when CLUSTER SLOTS
+    -- returns the same nodes in a different order.
+    table.sort(masters, function(a, b)
+        local ka = tostring(a.ip) .. ":" .. tostring(a.port)
+        local kb = tostring(b.ip) .. ":" .. tostring(b.port)
+        return ka < kb
+    end)
+
     return masters
+end
+
+
+-- Two salted CRC16 values of the sorted master list. The cursor carries the
+-- fingerprint, so a changed set of masters with the same count is detected.
+local function scan_master_fingerprint(masters)
+    local ids = new_tab(#masters, 0)
+    for i = 1, #masters do
+        ids[i] = tostring(masters[i].ip) .. ":" .. tostring(masters[i].port)
+    end
+
+    local list = table_concat(ids, ",")
+    return redis_crc(list .. "|a") .. "-" .. redis_crc(list .. "|b")
 end
 
 
@@ -1832,6 +1859,9 @@ end
 --- Scan every master of the cluster.
 -- Pass the same options on every call, as with the Redis SCAN command. Compare
 -- the returned cursor with "0" to stop.
+--
+-- One call is bounded: it returns after `COUNT` keys (default 100) or after 16
+-- SCAN round trips, whichever comes first. Call again until the cursor is "0".
 -- @tparam string|number cursor The cursor of the previous call, or "0" to start.
 -- @treturn string|nil The next cursor. `"0"` ends the iteration.
 -- @treturn table|nil The keys found in this call.
@@ -1843,21 +1873,22 @@ function _M.scan_all(self, cursor, ...)
     end
 
     local total = #masters
+    local fingerprint = scan_master_fingerprint(masters)
     local index, node_cursor
 
     if cursor == "0" or cursor == 0 then
         index, node_cursor = 1, "0"
     else
-        local i, seen_total, node = string.match(tostring(cursor), SCAN_CURSOR_PATTERN)
+        local i, seen_total, seen_fingerprint, node =
+            string.match(tostring(cursor), SCAN_CURSOR_PATTERN)
         if not i then
             return nil, nil, "invalid scan cursor: " .. tostring(cursor)
         end
 
         i, seen_total = tonumber(i), tonumber(seen_total)
-        if seen_total ~= total then
-            return nil, nil, "scan cursor is stale: the cluster has " .. total ..
-                        " masters now and the cursor was made with " .. seen_total ..
-                        "; restart with cursor 0"
+        if seen_total ~= total or seen_fingerprint ~= fingerprint then
+            return nil, nil, "scan cursor is stale: the set of masters changed; " ..
+                        "restart with cursor 0"
         end
 
         if i < 1 or i > total then
@@ -1867,10 +1898,12 @@ function _M.scan_all(self, cursor, ...)
         index, node_cursor = i, node
     end
 
-    local budget = scan_count(...)
+    local budget = scan_count(...) or SCAN_ALL_DEFAULT_COUNT
     local keys = {}
+    local rounds = 0
 
     while index <= total do
+        rounds = rounds + 1
         local res, scan_err = scan_one_master(self, masters[index], node_cursor, ...)
         if not res then
             return nil, nil, scan_err
@@ -1887,7 +1920,7 @@ function _M.scan_all(self, cursor, ...)
             node_cursor = "0"
         end
 
-        if budget and #keys >= budget then
+        if #keys >= budget or rounds >= SCAN_ALL_MAX_ROUNDS then
             break
         end
     end
@@ -1896,7 +1929,7 @@ function _M.scan_all(self, cursor, ...)
         return "0", keys, nil
     end
 
-    return index .. ":" .. total .. ":" .. node_cursor, keys, nil
+    return index .. ":" .. total .. ":" .. fingerprint .. ":" .. node_cursor, keys, nil
 end
 
 
