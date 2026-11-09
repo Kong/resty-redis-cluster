@@ -1753,6 +1753,9 @@ local function scan_one_master(self, master, cursor, ...)
 
     local ok, err = connect_with_pool(redis_client, master.ip, master.port, config)
     if not ok then
+        -- The cached master list can still name a node that failed over. Every
+        -- other command path refreshes the slot cache on a connection error.
+        self:refresh_slots()
         return nil, "failed to connect to " .. tostring(master.ip) .. ":" ..
                     tostring(master.port) .. ": " .. tostring(err)
     end
@@ -1766,6 +1769,7 @@ local function scan_one_master(self, master, cursor, ...)
     local res, scan_err = redis_client:scan(cursor, ...)
     if not res then
         redis_client:close()
+        self:refresh_slots()
         return nil, scan_err
     end
 

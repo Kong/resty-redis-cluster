@@ -502,3 +502,174 @@ err: scan cursor is stale: the set of masters changed; restart with cursor 0
 --- no_error_log
 [error]
 
+=== TEST 11: a master that cannot be reached refreshes the slot cache
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- 7001 owns slots 0-5460 and is down; the configured seed node 7002 works.
+            fake.connect = function(self, host, port)
+                if host .. ":" .. tostring(port) == "127.0.0.1:7001" then
+                    return nil, "connection refused"
+                end
+                return 1
+            end
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", {} }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllDeadMaster",
+                serv_list = { { ip = "127.0.0.1", port = 7002 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local function slot_fetches()
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == "cluster-slots" then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            red:init_slots()
+            local before = slot_fetches()
+
+            local c, keys, err = red:scan_all("0", "COUNT", "10")
+            local after = slot_fetches()
+
+            ngx.say("cursor: ", tostring(c))
+            ngx.say("err starts with failed to connect: ", tostring(tostring(err):find("failed to connect", 1, true) ~= nil))
+            ngx.say("slot cache refreshed: ", tostring(after > before))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+cursor: nil
+err starts with failed to connect: true
+slot cache refreshed: true
+--- no_error_log
+[error]
+
+=== TEST 12: one failing call refreshes the slot cache once
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.connect = function(self, host, port)
+                if host .. ":" .. tostring(port) == "127.0.0.1:7001" then
+                    return nil, "connection refused"
+                end
+                return 1
+            end
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", {} }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllOneRefresh",
+                serv_list = { { ip = "127.0.0.1", port = 7002 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local function slot_fetches()
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == "cluster-slots" then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            red:init_slots()
+            local before = slot_fetches()
+
+            -- Three masters fail on the first page, but the call returns on the
+            -- first failure, so the cache is fetched once.
+            local c = red:scan_all("0", "COUNT", "10")
+            local after = slot_fetches()
+
+            ngx.say("cursor: ", tostring(c))
+            ngx.say("slot fetches in one call: ", after - before)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+cursor: nil
+slot fetches in one call: 1
+--- no_error_log
+[error]
+
+=== TEST 13: a later call succeeds after the failed one refreshed the cache
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            local dead = true
+            fake.connect = function(self, host, port)
+                if dead and host .. ":" .. tostring(port) == "127.0.0.1:7001" then
+                    return nil, "connection refused"
+                end
+                return 1
+            end
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return { "0", { self._node .. ":k" } }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllRecover",
+                serv_list = { { ip = "127.0.0.1", port = 7002 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local c1, k1, e1 = red:scan_all("0", "COUNT", "100")
+
+            dead = false
+            local c2, k2, e2 = red:scan_all("0", "COUNT", "100")
+
+            ngx.say("first err: ", tostring(e1) ~= "nil")
+            ngx.say("second err: ", tostring(e2))
+            ngx.say("second keys: ", k2 and #k2 or "nil")
+        ';
+    }
+--- request
+GET /t
+--- response_body
+first err: true
+second err: nil
+second keys: 3
+--- no_error_log
+[error]
+
