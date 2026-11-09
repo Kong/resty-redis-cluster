@@ -1357,7 +1357,9 @@ local function run_requests(self, reqs)
         -- we need to record the original index and finally we can construct the result with origin order
         reqs[i].origin_index = i
         local key = reqs[i].key
-        local slot = redis_slot(normalize_key(key))
+        -- commit_pipeline builds its requests without a slot, so keep the lookup
+        -- for that path.
+        local slot = reqs[i].slot or redis_slot(normalize_key(key))
         if slots[slot] == nil then
             self:refresh_slots()
             return nil, "not slots information present, nginx might have never successfully executed cluster(\"slots\")"
@@ -1501,12 +1503,15 @@ local function build_slot_requests(cmd, order, groups)
     local reqs = new_tab(#order, 0)
 
     for i = 1, #order do
-        local group = groups[order[i]]
+        local slot = order[i]
+        local group = groups[slot]
         local args = new_tab(#group - 1, 0)
         for j = 2, #group do
             args[j - 1] = group[j].key
         end
-        reqs[i] = { cmd = cmd, key = group[1].key, args = args }
+        -- The slot is known here. Carrying it spares run_requests a second hash
+        -- tag parse and CRC16 pass over the same key.
+        reqs[i] = { cmd = cmd, key = group[1].key, args = args, slot = slot }
     end
 
     return reqs
@@ -1515,12 +1520,30 @@ end
 
 -- MGET-like commands: the reply is one value for each key, in the order of the
 -- keys. Send one part for each slot, then put the values back in that order.
-local function split_array_command(self, cmd, keys)
-    local order, groups = group_keys_by_slot(keys)
+-- All the keys land in one slot. Check before grouping: the common case is a
+-- batch of related keys, and grouping builds a record for every key.
+local function keys_share_one_slot(keys)
+    if #keys < 2 then
+        return true
+    end
 
-    if #order == 1 then
+    local slot = redis_slot(normalize_key(keys[1]))
+    for i = 2, #keys do
+        if redis_slot(normalize_key(keys[i])) ~= slot then
+            return false
+        end
+    end
+
+    return true
+end
+
+
+local function split_array_command(self, cmd, keys)
+    if keys_share_one_slot(keys) then
         return handle_command_with_retry(self, nil, nil, false, cmd, unpack(keys))
     end
+
+    local order, groups = group_keys_by_slot(keys)
 
     ngx_log(NGX_DEBUG, "split ", cmd, ": ", #keys, " keys in ", #order, " slots")
 
@@ -1554,11 +1577,11 @@ end
 -- DEL-like commands: the reply is a count. Send one part for each slot and add
 -- the counts.
 local function split_sum_command(self, cmd, keys)
-    local order, groups = group_keys_by_slot(keys)
-
-    if #order == 1 then
+    if keys_share_one_slot(keys) then
         return handle_command_with_retry(self, nil, nil, false, cmd, unpack(keys))
     end
+
+    local order, groups = group_keys_by_slot(keys)
 
     ngx_log(NGX_DEBUG, "split ", cmd, ": ", #keys, " keys in ", #order, " slots")
 
@@ -1632,19 +1655,12 @@ end
 
 -- A command that cannot be split only works when all of its keys share a slot.
 local function check_keys_in_one_slot(cmd, keys)
-    if #keys < 2 then
+    if keys_share_one_slot(keys) then
         return true
     end
 
-    local slot = redis_slot(normalize_key(keys[1]))
-    for i = 2, #keys do
-        if redis_slot(normalize_key(keys[i])) ~= slot then
-            return nil, "command '" .. cmd .. "' needs all keys in one slot; " ..
-                        "use a hash tag or split the call"
-        end
-    end
-
-    return true
+    return nil, "command '" .. cmd .. "' needs all keys in one slot; " ..
+                "use a hash tag or split the call"
 end
 
 
