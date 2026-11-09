@@ -1791,7 +1791,13 @@ local function scan_count(...)
 end
 
 
-local function _do_cmd(self, cmd, key, ...)
+local function _do_cmd(self, raw_cmd, key, ...)
+    -- Redis takes a command name in any case, and the metatable builds a method
+    -- for any field name, so red:DEL(...) reaches here too. The tables below
+    -- hold lower case names: normalize once, or an upper case call skips the
+    -- slot check, the split and the blocklist.
+    local cmd = string.lower(raw_cmd)
+
     if cluster_invalid_cmds[cmd] == true then
         return nil, "command not supported"
     end

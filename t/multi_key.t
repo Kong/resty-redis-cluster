@@ -1090,3 +1090,139 @@ res: nil
 err: touch failed for slot 8157: ERR boom
 --- no_error_log
 [error]
+
+=== TEST 24: an upper case command name takes the same path
+Redis takes a command name in any case, and the client builds a method for any
+name. Without normalization an upper case call skips the slot check and the
+split, so it reaches Redis and fails with CROSSSLOT.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "del" or cmd == "exists" then
+                    return 1
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkUpperSplit",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            -- "b", "z" and "a" are in three different slots.
+            local lower = red:del("b", "z", "a")
+            local upper = red:DEL("b", "z", "a")
+            local mixed = red:Exists("b", "z", "a")
+
+            ngx.say("lower: ", tostring(lower))
+            ngx.say("upper: ", tostring(upper))
+            ngx.say("mixed: ", tostring(mixed))
+
+            local sent = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and (e.cmd == "del" or e.cmd == "exists") then
+                    sent = sent + 1
+                end
+            end
+            ngx.say("commands: ", sent)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+lower: 3
+upper: 3
+mixed: 3
+commands: 9
+--- no_error_log
+[error]
+
+=== TEST 25: an upper case guarded command returns the same error
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkUpperGuard",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:MSET("b", 1, "z", 2)
+            local same, same_err = red:MSET("{s}a", 1, "{s}b", 2)
+
+            ngx.say("cross: ", tostring(res), " ", tostring(err))
+            ngx.say("same: ", tostring(same), " ", tostring(same_err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+cross: nil command 'mset' needs all keys in one slot; use a hash tag or split the call
+same: OK nil
+--- no_error_log
+[error]
+
+=== TEST 26: an upper case command cannot reach a blocked command
+"shutdown" is in the blocklist. The instance holds no "shutdown" field, so the
+metatable builds a method for it, and an upper case call must reach the same
+blocklist entry.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkUpperBlocked",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local lower, lower_err = red:shutdown()
+            local upper, upper_err = red:SHUTDOWN()
+
+            ngx.say("lower: ", tostring(lower), " ", tostring(lower_err))
+            ngx.say("upper: ", tostring(upper), " ", tostring(upper_err))
+
+            local sent = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "shutdown" then
+                    sent = sent + 1
+                end
+            end
+            ngx.say("shutdown commands sent: ", sent)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+lower: nil command not supported
+upper: nil command not supported
+shutdown commands sent: 0
+--- no_error_log
+[error]
