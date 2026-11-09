@@ -1627,7 +1627,7 @@ end
 -- visit, the number of masters seen when the iteration started, a fingerprint of
 -- that master list, and the cursor of that master. "0" means that the whole
 -- iteration is complete.
-local SCAN_CURSOR_PATTERN = "^(%d+):(%d+):([%d%-]+):(%d+)$"
+local SCAN_CURSOR_PATTERN = "^(%d+):(%d+):(%d+):(%d+)$"
 
 -- One scan_all call stops when it reaches the key budget or the round-trip cap,
 -- whichever comes first, so a sparse MATCH cannot scan the whole keyspace.
@@ -1673,16 +1673,15 @@ local function scan_master_list(self)
 end
 
 
--- Two salted CRC16 values of the sorted master list. The cursor carries the
--- fingerprint, so a changed set of masters with the same count is detected.
+-- A fingerprint of the sorted master list. The cursor carries it, so a changed
+-- set of masters with the same count is detected as well.
 local function scan_master_fingerprint(masters)
     local ids = new_tab(#masters, 0)
     for i = 1, #masters do
         ids[i] = tostring(masters[i].ip) .. ":" .. tostring(masters[i].port)
     end
 
-    local list = table_concat(ids, ",")
-    return redis_crc(list .. "|a") .. "-" .. redis_crc(list .. "|b")
+    return ngx.crc32_long(table_concat(ids, ","))
 end
 
 
@@ -1834,7 +1833,8 @@ function _M.scan_all(self, cursor, ...)
         end
 
         i, seen_total = tonumber(i), tonumber(seen_total)
-        if seen_total ~= total or seen_fingerprint ~= fingerprint then
+        -- The pattern captures the fingerprint as a string; the current one is a number.
+        if seen_total ~= total or seen_fingerprint ~= tostring(fingerprint) then
             return nil, "scan cursor is stale: the set of masters changed; " ..
                        "restart with cursor 0"
         end

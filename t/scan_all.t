@@ -297,7 +297,7 @@ scans: 0
                 lock_timeout = 1,
             }))
 
-            local res, err = red:scan_all("1:3:0-0:0")
+            local res, err = red:scan_all("1:3:0:0")
             local cursor, keys = res and res[1], res and res[2]
             local scans = 0
             for _, e in ipairs(fake.events) do
@@ -733,3 +733,53 @@ keys are not a string: true
 --- no_error_log
 [error]
 
+
+=== TEST 24: the cursor carries one crc32 of the sorted master list
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd, cursor)
+                if cmd ~= "scan" then
+                    return "OK"
+                end
+                if cursor == "0" then
+                    return { "7", { "k1" } }
+                end
+                return { "0", {} }
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllFingerprint",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res = red:scan_all("0", "COUNT", "1")
+            local cursor = res and res[1]
+
+            local _, total, fingerprint = string.match(cursor or "", "^(%d+):(%d+):(%d+):")
+            local expected = ngx.crc32_long(
+                "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003")
+
+            ngx.say("shape: ", tostring(cursor ~= nil and cursor:match("^%d+:%d+:%d+:%d+$") ~= nil))
+            ngx.say("total: ", tostring(total))
+            ngx.say("fingerprint: ", tostring(fingerprint))
+            ngx.say("matches crc32: ", tostring(fingerprint == tostring(expected)))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+shape: true
+total: 3
+fingerprint: 866892679
+matches crc32: true
+--- no_error_log
+[error]

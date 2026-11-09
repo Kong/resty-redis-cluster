@@ -474,8 +474,8 @@ whichever comes first, and returns a continuation cursor. A sparse `MATCH` there
 the whole keyspace in one call. Call again until the cursor is `"0"`.
 
 The cursor also carries a fingerprint of the master list. When the set of masters changes during
-the iteration, `scan_all` returns an error and asks you to start again from cursor `0`. A change
-in the order of the same masters does not affect the cursor.
+the iteration, `scan_all` returns an error that starts with `scan cursor is stale` and asks you to
+start again from cursor `0`. A change in the order of the same masters does not affect the cursor.
 
 ### Limitation
 
