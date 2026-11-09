@@ -671,7 +671,7 @@ sent: 1
 --- no_error_log
 [error]
 
-=== TEST 16: a nil argument returns an error
+=== TEST 15: a nil argument returns an error
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -712,7 +712,7 @@ sent: 0
 --- no_error_log
 [error]
 
-=== TEST 17: a repeated key keeps its value and its position
+=== TEST 16: a repeated key keeps its value and its position
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -767,7 +767,7 @@ cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
 --- no_error_log
 [error]
 
-=== TEST 18: SMOVE and RENAME reject a wrong argument count
+=== TEST 17: SMOVE and RENAME reject a wrong argument count
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -818,7 +818,7 @@ ok: true sent: 1
 --- no_error_log
 [error]
 
-=== TEST 19: a MOVED reply on one split part is retried
+=== TEST 18: a MOVED reply on one split part is retried
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -874,7 +874,7 @@ mgets: 4
 --- no_error_log
 [error]
 
-=== TEST 20: an ASK reply on one split part is retried on the target node
+=== TEST 19: an ASK reply on one split part is retried on the target node
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -929,3 +929,164 @@ asking: 1
 --- no_error_log
 [error]
 
+
+=== TEST 20: MGET returns no values when a middle part fails
+"b", "z" and "a" are in 7001, 7002 and 7003, so the reply has three parts.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "mget" and self._node == "127.0.0.1:7002" then
+                    return false, "ERR boom"
+                end
+                if cmd == "mget" then
+                    return { "v1" }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkMgetMiddleError",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:mget("b", "z", "a")
+            ngx.say("res: ", tostring(res))
+            ngx.say("err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res: nil
+err: mget failed for slot 8157: ERR boom
+--- no_error_log
+[error]
+
+=== TEST 21: MGET returns no values when the first part fails
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "mget" and self._node == "127.0.0.1:7001" then
+                    return false, "ERR boom"
+                end
+                if cmd == "mget" then
+                    return { "v1" }
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkMgetFirstError",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:mget("b", "z", "a")
+            ngx.say("res: ", tostring(res))
+            ngx.say("err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res: nil
+err: mget failed for slot 3300: ERR boom
+--- no_error_log
+[error]
+
+=== TEST 22: UNLINK returns no count when a middle part fails
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "unlink" and self._node == "127.0.0.1:7002" then
+                    return false, "ERR boom"
+                end
+                if cmd == "unlink" then
+                    return 1
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkUnlinkMiddleError",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:unlink("b", "z", "a")
+            ngx.say("res: ", tostring(res))
+            ngx.say("err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res: nil
+err: unlink failed for slot 8157: ERR boom
+--- no_error_log
+[error]
+
+=== TEST 23: TOUCH returns no count when a middle part fails
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "touch" and self._node == "127.0.0.1:7002" then
+                    return false, "ERR boom"
+                end
+                if cmd == "touch" then
+                    return 1
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkTouchMiddleError",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            local res, err = red:touch("b", "z", "a")
+            ngx.say("res: ", tostring(res))
+            ngx.say("err: ", tostring(err))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res: nil
+err: touch failed for slot 8157: ERR boom
+--- no_error_log
+[error]
