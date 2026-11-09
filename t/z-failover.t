@@ -28,6 +28,16 @@ my $pwd = cwd();
 my $compose = $ENV{FAILOVER_COMPOSE} || "t/redis_cluster/7.2/no-auth/docker-compose.yaml";
 my $compose_cmd = "docker compose -f '$compose'";
 
+# This test owns the fixture while it runs: it stops a container and rebuilds
+# the project at the end. Both fixtures in this repository create a network
+# named no-auth_redis-cluster and containers named redis_1..redis_6, so stop
+# any other fixture first. Do not add "-p": the caller starts the fixture with
+# a plain "docker compose -f", and a different project name here would not find
+# those containers.
+if (system("docker info >/dev/null 2>&1") != 0) {
+    plan(skip_all => "docker is not available");
+}
+
 add_block_preprocessor(sub {
     my $block = shift;
     my $config = $block->config;
@@ -161,7 +171,8 @@ fixture at the end, because a restarted node has lost its cluster config.
             end
 
             -- A restarted node has lost nodes.conf and its data, so rebuild the
-            -- whole fixture instead of starting that one container again.
+            -- whole fixture instead of starting that one container again. The
+            -- rebuild leaves the cluster usable for the next block.
             shell("__COMPOSE_CMD__ down -v")
             shell("__COMPOSE_CMD__ up -d")
             local restored = false
@@ -171,6 +182,11 @@ fixture at the end, because a restarted node has lost its cluster config.
                     break
                 end
                 ngx.sleep(2)
+            end
+
+            if not restored then
+                ngx.log(ngx.ERR, "the fixture did not come back; start it by hand: ",
+                        "__COMPOSE_CMD__ up -d")
             end
 
             ngx.say("keys before: ", tostring(before))
