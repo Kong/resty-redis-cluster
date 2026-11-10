@@ -599,6 +599,34 @@ local function is_auth_rejected(err)
 end
 
 
+-- Redis replies to these with "-ERR <text>", which resty.redis reports as
+-- `false, err`, the same shape as a malformed command. They mean the cluster view
+-- may be stale, so a scan must refresh the slot cache before it gives up. A
+-- syntax error or a WRONGTYPE does not: the cluster is healthy, and a caller that
+-- repeats the bad call must not pay a CLUSTER SLOTS walk every time.
+local CLUSTER_LEVEL_ERRORS = {
+    "CLUSTERDOWN",
+    "MASTERDOWN",
+    "TRYAGAIN",
+    "READONLY",
+}
+
+
+local function is_cluster_level_error(err)
+    if type(err) ~= "string" then
+        return false
+    end
+
+    for i = 1, #CLUSTER_LEVEL_ERRORS do
+        if string_find(err, CLUSTER_LEVEL_ERRORS[i], 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+
 -- `ngx.log` rejects a table without `__tostring`, a function and a thread. A hook can
 -- raise those, and the log call must not raise a second error.
 local function to_string(value)
@@ -1766,8 +1794,17 @@ local function scan_one_master(self, master, cursor, ...)
 
     local res, scan_err = redis_client:scan(cursor, ...)
     if not res then
-        redis_client:close()
-        scan_refresh_slots(self)
+        -- `nil` is a socket or connection error. `false` is a reply from Redis: a
+        -- cluster level error still means the topology may be stale, but a
+        -- rejected command does not justify a walk over the address list.
+        if res == nil or is_cluster_level_error(scan_err) then
+            redis_client:close()
+            scan_refresh_slots(self)
+        else
+            -- The connection answered, so it is healthy. Return it to the pool.
+            release_connection(redis_client, config)
+        end
+
         return nil, scan_err
     end
 

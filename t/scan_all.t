@@ -974,3 +974,132 @@ fingerprint: 866892679
 matches crc32: true
 --- no_error_log
 [error]
+
+=== TEST 20: a command that Redis rejects does not refresh the slot cache
+resty.redis reports a "-ERR" reply as `false, err` and a socket error as
+`nil, err`. A rejected command says nothing about the topology, so the call
+must return the error without a CLUSTER SLOTS walk on every retry.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            -- A real node answers -ERR for an odd option tail such as "MATCH"
+            -- with no value.
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return false, "ERR syntax error"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllBadCommand",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+            red:init_slots()
+
+            local function fetches()
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == "cluster-slots" then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+            local function count_event(name)
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == name then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            -- Count only what the bad calls do, not the first slot fetch.
+            fake.events = {}
+            local errs = {}
+            for i = 1, 5 do
+                local _, err = red:scan_all("0", "MATCH")
+                errs[i] = tostring(err)
+            end
+
+            ngx.say("err: ", errs[1])
+            ngx.say("slot fetches for 5 bad calls: ", fetches())
+            -- The connection answered, so it belongs back in the pool.
+            ngx.say("closed: ", count_event("close"), " pooled: ", count_event("keepalive"))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+err: ERR syntax error
+slot fetches for 5 bad calls: 0
+closed: 0 pooled: 5
+--- no_error_log
+[error]
+
+=== TEST 21: a cluster level error still refreshes the slot cache
+CLUSTERDOWN is a "-ERR" reply too, so resty.redis reports it as `false`. The
+cluster view may be stale, so this one must refresh. This is the guard against
+treating every `false` reply as a bad command.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                if cmd == "scan" then
+                    return false, "CLUSTERDOWN The cluster is down"
+                end
+                return "OK"
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "scanAllClusterDown",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+            red:init_slots()
+
+            local function fetches()
+                local n = 0
+                for _, e in ipairs(fake.events) do
+                    if e.ev == "cluster-slots" then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            local before = fetches()
+            local res, err = red:scan_all("0", "COUNT", "10")
+            local after = fetches()
+
+            ngx.say("res: ", tostring(res))
+            ngx.say("err: ", tostring(err))
+            ngx.say("slot cache refreshed: ", tostring(after > before))
+        ';
+    }
+--- request
+GET /t
+--- response_body
+res: nil
+err: CLUSTERDOWN The cluster is down
+slot cache refreshed: true
+--- no_error_log
+[error]
+
