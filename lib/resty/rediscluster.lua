@@ -1518,10 +1518,8 @@ local function build_slot_requests(cmd, order, groups)
 end
 
 
--- MGET-like commands: the reply is one value for each key, in the order of the
--- keys. Send one part for each slot, then put the values back in that order.
--- All the keys land in one slot. Check before grouping: the common case is a
--- batch of related keys, and grouping builds a record for every key.
+-- True when all keys land in one slot. Check before grouping: the common case
+-- is a batch of related keys, and grouping builds a record for every key.
 local function keys_share_one_slot(keys)
     if #keys < 2 then
         return true
@@ -1538,6 +1536,8 @@ local function keys_share_one_slot(keys)
 end
 
 
+-- MGET-like commands: the reply is one value for each key, in the order of the
+-- keys. Send one part for each slot, then put the values back in that order.
 local function split_array_command(self, cmd, keys)
     if keys_share_one_slot(keys) then
         return handle_command_with_retry(self, nil, nil, false, cmd, unpack(keys))
@@ -1726,8 +1726,6 @@ local function scan_master_fingerprint(masters)
 end
 
 
--- SCAN on one master. This path cannot use handle_command_with_retry, because
--- that function uses the cursor as the routing key.
 -- Refresh from the scan path. A plain command must refresh at once, or recovery
 -- waits for the window; a scan runs on a timer, so one walk per window is enough.
 local function scan_refresh_slots(self)
@@ -1742,6 +1740,8 @@ local function scan_refresh_slots(self)
 end
 
 
+-- SCAN on one master. This path cannot use handle_command_with_retry, because
+-- that function uses the cursor as the routing key.
 local function scan_one_master(self, master, cursor, ...)
     local config = self.config
     local redis_client = redis:new()
