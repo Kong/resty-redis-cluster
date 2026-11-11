@@ -1251,7 +1251,7 @@ shutdown commands sent: 0
 --- no_error_log
 [error]
 
-=== TEST 28: a MOVED reply on a split sum part is retried and still counted
+=== TEST 27: a MOVED reply on a split sum part is retried and still counted
 TEST 18 covers MOVED for mget. A sum command merges a number instead of a value
 list, so a redirect that loses a part shows up as a wrong count and nothing else.
 --- http_config eval: $::HttpConfig
@@ -1297,7 +1297,7 @@ count: 2 err: nil
 --- no_error_log
 [error]
 
-=== TEST 29: a part that is redirected still lands in its own position
+=== TEST 28: a part that is redirected still lands in its own position
 The reply array is rebuilt from the origin index of each part. A redirect on
 the middle part must not shift the other values.
 --- http_config eval: $::HttpConfig
@@ -1347,7 +1347,7 @@ values: v:b,v:z,v:a err: nil
 --- no_error_log
 [error]
 
-=== TEST 30: a queued command that is rejected does not take a result slot
+=== TEST 29: a queued command that is rejected does not take a result slot
 A cross-slot multi-key command is rejected when it is queued, so the result
 array is one shorter than the number of calls. A caller that ignores the return
 value of the queued call reads the next command's result.
@@ -1393,7 +1393,7 @@ results: 1 err: nil
 --- no_error_log
 [error]
 
-=== TEST 31: RENAMENX rejects two keys in different slots
+=== TEST 30: RENAMENX rejects two keys in different slots
 RENAMENX takes the same two keys as RENAME, so it must return the same named
 error and must not reach Redis.
 --- http_config eval: $::HttpConfig
