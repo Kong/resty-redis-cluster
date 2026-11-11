@@ -439,7 +439,7 @@ A command that cannot be split keeps its normal behavior when all of its keys sh
 | Command | Keys in one slot | Keys in different slots |
 | --- | --- | --- |
 | `MSET`, `MSETNX` | Sent unchanged | Returns an error |
-| `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `SMOVE` | Sent unchanged | Returns an error |
+| `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `RENAMENX`, `SMOVE` | Sent unchanged | Returns an error |
 
 `MSET` is not split. A split `MSET` is not atomic, and an error on a later slot leaves the earlier
 slots written. A cross-slot `MSET` returns
@@ -464,11 +464,20 @@ A command that is not in the tables above is sent the way it always was, so a cr
 To keep related keys in one slot, use a hash tag. For example, `entitlement:{plugin-id}:subject`
 puts every key of one plugin instance in one slot.
 
+This client rejects a multi-key command that it cannot run safely, and it does so before the
+command reaches Redis. Some other cluster clients send the command and let the server answer
+`CROSSSLOT`. The earlier error names the command and suggests a hash tag, which is easier to act
+on from a plugin log.
+
 ### Pipelines
 
 A multi-key command that spans slots is rejected when it is queued, so the caller must check the
 return value of each call that it adds to a pipeline. `commit_pipeline` returns one result for
 each command that was queued, so a command that was rejected does not occupy a position.
+
+This client does not send `MULTI`/`EXEC`: `commit_pipeline` sends one plain pipeline to each node.
+The one-slot rule above is therefore stricter than the non-transactional `Pipeline` of some other
+clients, where a single command may span nodes. It matches what a transaction would require.
 
 ### Scanning the whole cluster
 
@@ -502,8 +511,9 @@ The cursor also carries a fingerprint of the master list. When the set of master
 the iteration, `scan_all` returns an error that starts with `scan cursor is stale` and asks you to
 start again from cursor `0`. A change in the order of the same masters does not affect the cursor.
 
-`scan_all` reads masters only. A replica can hold keys that its master does not have yet, and it
-can lag behind. Do not use `scan_all` to count keys for a migration decision.
+`scan_all` reads masters only. It ignores `enable_slave_read`, because a replica can hold keys
+that its master does not have yet and can lag behind. Do not use `scan_all` to count keys for a
+migration decision.
 
 A retry can repeat a page. When one master fails, the call returns an error and does not keep the
 page. If the caller starts again with the same cursor, the keys of that page can appear twice. Drop
@@ -517,7 +527,7 @@ that rotates credentials during an iteration must call `scan_all` again with the
 
 ### Limitation
 
-1. `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
+1. `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `RENAMENX` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
 
 2. A split `DEL`, `UNLINK` or `TOUCH` is not atomic; see Multi-key commands above.
 
@@ -548,8 +558,8 @@ cluster.
 #### Unreleased
 
 1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A split `DEL`, `UNLINK` or `TOUCH` is not atomic: an error on one part leaves the other parts applied, and the call does not report how many keys it changed.
-2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`. `MSET` is not split, because a split `MSET` is not atomic.
-3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME` also returns an error.
+2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `RENAMENX` and `SMOVE`. `MSET` is not split, because a split `MSET` is not atomic.
+3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME`/`RENAMENX` also returns an error.
 4. Add `scan_all()` to scan every master. It returns `{ cursor, keys }`, like `scan`. One call is bounded, and its cursor carries a fingerprint of the master list.
 5. Add `set_keepalive()`, `close()`, `get_reused_times()` and `array_to_hash()`, so a caller can use one code path for a single-node client and a cluster client. `set_keepalive()` and `close()` do nothing: the library returns each connection to the pool after its command.
 6. A refresh of the slot cache stops after `max_connection_timeout`, default 10 seconds. Before, a cluster that dropped packets could hold the caller for minutes.
