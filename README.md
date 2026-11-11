@@ -21,7 +21,7 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 
 4. Support hashtag. Just give your key like name{tag}
 
-   `mget` and `mset` accept keys in different slots: the keys are split by slot, one command is sent per slot and the replies are merged in the original order. A cross-slot `mset` is not atomic, so an error can leave some slots written. Inside a pipeline these two commands still need all keys in one slot (use a hash tag).
+   `mget` and `mset` accept keys in different slots: the keys are split by slot, one command is sent per slot and the replies are merged in the original order. A cross-slot `mset`, `del`, `unlink` or `touch` is not atomic, so an error can leave some slots written. Inside a pipeline these two commands still need all keys in one slot (use a hash tag).
 
 5. Support read from slave node by readonly mode, both usual command and pipeline. While enable slave node read, resty-redis-cluster will randomly pickup a node which is mapped to the request key, no matter it's master or slave.
 
@@ -424,6 +424,16 @@ are in different slots. The client sends one part for each slot, then combines t
 | `MGET` | The values, in the order of the keys |
 | `DEL`, `UNLINK`, `EXISTS`, `TOUCH` | The sum of the counts |
 
+A split `DEL`, `UNLINK` or `TOUCH` is not atomic. The client sends one part to each node, one node
+at a time and in no fixed order, so an error on any part leaves the other parts applied: a
+connection failure, an auth failure, a failed redirect retry or a failed commit all return an error
+while the parts that already ran stay applied. The call does not report how many keys it changed,
+and it does not report which slots ran. A retry can therefore return a count different from the
+number of keys the caller asked to delete. To act on several keys as one unit, use a hash tag so
+that the keys share a slot.
+
+`EXISTS` and `MGET` are reads, so a failure on one part changes nothing.
+
 A command that cannot be split keeps its normal behavior when all of its keys share a slot:
 
 | Command | Keys in one slot | Keys in different slots |
@@ -509,20 +519,22 @@ that rotates credentials during an iteration must call `scan_all` again with the
 
 1. `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE` are not split across slots. They return an error when their keys are in different slots. Other multi-key commands (`SINTERSTORE`, `SUNIONSTORE`, `SDIFFSTORE`, `PFMERGE`, `LMOVE`, `RPOPLPUSH`, `COPY`, `BITOP`, `ZUNIONSTORE`, `ZINTERSTORE`) are not guarded either, so a cross-slot call returns `CROSSSLOT` from Redis.
 
-2. Doesn't support transactions operations: MULTI DISCARD EXEC WATCH
+2. A split `DEL`, `UNLINK` or `TOUCH` is not atomic; see Multi-key commands above.
 
-3. Doesn't support pub sub. Actually redis cluster didn't check slot for pub sub commands, so using normal resty redis client to conenct with specific node in a cluster still works.
+3. Doesn't support transactions operations: MULTI DISCARD EXEC WATCH
 
-4. Limitation only for turn on enable slave read: If we need to discover new slave node(but without adding new master), must retrigger new slot mapping cache refresh, otherwise slot mapping still record the last version of node tables.(easiest way is rebooting nginx nodes)
+4. Doesn't support pub sub. Actually redis cluster didn't check slot for pub sub commands, so using normal resty redis client to conenct with specific node in a cluster still works.
 
-5. Limitation only for turn on enable slave read: If slave -> master link is down(maybe still under sync and recovery), resty-redis-cluster will not filter these nodes out. Thus, read from slave may return unexpected response. Suggest always catch the response parsing exception while enable slave read.
+5. Limitation only for turn on enable slave read: If we need to discover new slave node(but without adding new master), must retrigger new slot mapping cache refresh, otherwise slot mapping still record the last version of node tables.(easiest way is rebooting nginx nodes)
+
+6. Limitation only for turn on enable slave read: If slave -> master link is down(maybe still under sync and recovery), resty-redis-cluster will not filter these nodes out. Thus, read from slave may return unexpected response. Suggest always catch the response parsing exception while enable slave read.
    This is because client depends on cluster slots command.
 
-6. An instance is not reentrant for pipelines. `init_pipeline()` stores the queue on the instance, and every command on that instance joins the queue until `commit_pipeline()` or `cancel_pipeline()`. Do not let two coroutines start a pipeline on the same instance. Simple commands are safe to run from several coroutines on one instance while no pipeline is active on it.
+7. An instance is not reentrant for pipelines. `init_pipeline()` stores the queue on the instance, and every command on that instance joins the queue until `commit_pipeline()` or `cancel_pipeline()`. Do not let two coroutines start a pipeline on the same instance. Simple commands are safe to run from several coroutines on one instance while no pipeline is active on it.
 
-7. The client reads the IP of a node from `CLUSTER SLOTS`, which lists only the nodes that hold a slot. When a slot moves to a new node that holds no slot yet, the client reaches the ASK target by hostname only.
+8. The client reads the IP of a node from `CLUSTER SLOTS`, which lists only the nodes that hold a slot. When a slot moves to a new node that holds no slot yet, the client reaches the ASK target by hostname only.
 
-8. The client reads an `ASK` or `MOVED` address as `host:port`. An IPv6 literal such as `[::1]:6379` does not parse.
+9. The client reads an `ASK` or `MOVED` address as `host:port`. An IPv6 literal such as `[::1]:6379` does not parse.
 
 ### Compatibilty
 
@@ -535,7 +547,7 @@ cluster.
 
 #### Unreleased
 
-1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`.
+1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A split `DEL`, `UNLINK` or `TOUCH` is not atomic: an error on one part leaves the other parts applied, and the call does not report how many keys it changed.
 2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME` and `SMOVE`. `MSET` is not split, because a split `MSET` is not atomic.
 3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME` also returns an error.
 4. Add `scan_all()` to scan every master. It returns `{ cursor, keys }`, like `scan`. One call is bounded, and its cursor carries a fingerprint of the master list.
