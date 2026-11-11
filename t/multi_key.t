@@ -767,7 +767,7 @@ cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
 --- no_error_log
 [error]
 
-=== TEST 17: SMOVE and RENAME reject a wrong argument count
+=== TEST 17: SMOVE, RENAME and RENAMENX reject a wrong argument count
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -792,11 +792,15 @@ cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
             local _, smove4 = red:smove("{s}a", "{s}b", "m", "extra")
             local _, rename1 = red:rename("{s}a")
             local _, rename3 = red:rename("{s}a", "{s}b", "{s}c")
+            local _, renamenx1 = red:renamenx("{s}a")
+            local _, renamenx3 = red:renamenx("{s}a", "{s}b", "{s}c")
             local ok, smove_ok = red:smove("{s}a", "{s}b", "m")
 
             local sent = 0
             for _, e in ipairs(fake.events) do
-                if e.ev == "cmd" and (e.cmd == "smove" or e.cmd == "rename") then
+                local accepted = e.cmd == "smove" or e.cmd == "rename"
+                                or e.cmd == "renamenx"
+                if e.ev == "cmd" and accepted then
                     sent = sent + 1
                 end
             end
@@ -804,6 +808,8 @@ cmds: 127.0.0.1:7001=b+b 127.0.0.1:7002=z
             ngx.say(tostring(smove4))
             ngx.say(tostring(rename1))
             ngx.say(tostring(rename3))
+            ngx.say(tostring(renamenx1))
+            ngx.say(tostring(renamenx3))
             ngx.say("ok: ", tostring(ok == 1 or ok), " sent: ", sent)
         ';
     }
@@ -814,6 +820,8 @@ wrong number of arguments for 'smove' command
 wrong number of arguments for 'smove' command
 wrong number of arguments for 'rename' command
 wrong number of arguments for 'rename' command
+wrong number of arguments for 'renamenx' command
+wrong number of arguments for 'renamenx' command
 ok: true sent: 1
 --- no_error_log
 [error]
@@ -1384,3 +1392,51 @@ rejected: nil command 'mget' needs one slot inside a pipeline; call it directly 
 results: 1 err: nil
 --- no_error_log
 [error]
+
+=== TEST 31: RENAMENX rejects two keys in different slots
+RENAMENX takes the same two keys as RENAME, so it must return the same named
+error and must not reach Redis.
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+            local fake = require "fake_redis"
+            package.loaded["resty.redis"] = fake
+
+            fake.reset()
+            fake.handler = function(self, cmd)
+                return 1
+            end
+
+            local redis = require "resty.rediscluster"
+            local red = assert(redis:new({
+                name = "mkRenamenx",
+                serv_list = { { ip = "127.0.0.1", port = 7001 } },
+                dict_name = "redis_cluster_slot_locks",
+                lock_timeout = 1,
+            }))
+
+            -- "b" is in 7001 and "z" is in 7002.
+            local cross, cross_err = red:renamenx("b", "z")
+            local same, same_err = red:renamenx("{s}a", "{s}b")
+
+            local sent = 0
+            for _, e in ipairs(fake.events) do
+                if e.ev == "cmd" and e.cmd == "renamenx" then
+                    sent = sent + 1
+                end
+            end
+            ngx.say("cross: ", tostring(cross), " ", tostring(cross_err))
+            ngx.say("same: ", tostring(same), " ", tostring(same_err))
+            ngx.say("sent: ", sent)
+        ';
+    }
+--- request
+GET /t
+--- response_body
+cross: nil command 'renamenx' needs all keys in one slot; use a hash tag or split the call
+same: 1 nil
+sent: 1
+--- no_error_log
+[error]
+

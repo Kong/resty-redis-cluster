@@ -97,14 +97,15 @@ local multi_key_cmds = {
     exists  = { keys = "all",     split = true,  combine = "sum"   },
     touch   = { keys = "all",     split = true,  combine = "sum"   },
 
-    mset    = { keys = "stride2", split = false },
-    msetnx  = { keys = "stride2", split = false },
-    sinter  = { keys = "all",     split = false },
-    sunion  = { keys = "all",     split = false },
-    sdiff   = { keys = "all",     split = false },
-    pfcount = { keys = "all",     split = false },
-    rename  = { keys = "all",     split = false, args = 2 },
-    smove   = { keys = "first2",  split = false, args = 3 },
+    mset     = { keys = "stride2", split = false },
+    msetnx   = { keys = "stride2", split = false },
+    sinter   = { keys = "all",     split = false },
+    sunion   = { keys = "all",     split = false },
+    sdiff    = { keys = "all",     split = false },
+    pfcount  = { keys = "all",     split = false },
+    rename   = { keys = "all",     split = false, args = 2 },
+    renamenx = { keys = "all",     split = false, args = 2 },
+    smove    = { keys = "first2",  split = false, args = 3 },
 }
 
 
