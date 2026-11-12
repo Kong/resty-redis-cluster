@@ -21,7 +21,7 @@ While building the client, thanks for https://github.com/cuiweixie/lua-resty-red
 
 4. Support hashtag. Just give your key like name{tag}
 
-   `mget` and `mset` accept keys in different slots: the keys are split by slot, one command is sent per slot and the replies are merged in the original order. A cross-slot `mset`, `del`, `unlink` or `touch` is not atomic, so an error can leave some slots written. Inside a pipeline these two commands still need all keys in one slot (use a hash tag).
+   `mget`, `del`, `unlink`, `exists` and `touch` accept keys in different slots: the keys are split by slot, one command is sent per slot and the replies are merged in the original order. A split `del`, `unlink` or `touch` is not atomic, so an error on one part leaves the other parts applied. Other multi-key commands, including `mset`, return an error when their keys are in different slots; see "Multi-key commands" below for the full list. Inside a pipeline a multi-key command still needs all keys in one slot (use a hash tag).
 
 5. Support read from slave node by readonly mode, both usual command and pipeline. While enable slave node read, resty-redis-cluster will randomly pickup a node which is mapped to the request key, no matter it's master or slave.
 
@@ -445,10 +445,6 @@ A command that cannot be split keeps its normal behavior when all of its keys sh
 slots written. A cross-slot `MSET` returns
 `command 'mset' needs all keys in one slot; use a hash tag or split the call`. To write several
 related keys, use a hash tag: `red_c:mset("{plugin-1}:a", 1, "{plugin-1}:b", 2)`.
-
-Earlier versions split `MSET` by slot and returned `OK`. A caller that relied on that must add a
-hash tag, or send one `MSET` for each slot and accept that a failure part way through leaves the
-earlier slots written.
 
 Command names are matched without regard to case: `red_c:DEL(...)` takes the same path as
 `red_c:del(...)`.
