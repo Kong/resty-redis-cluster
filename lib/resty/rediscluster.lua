@@ -1305,6 +1305,18 @@ local function _do_cmd_master(self, cmd, key, ...)
     return true, nil
 end
 
+-- A pipeline result holds { false, message } for a command that Redis rejected.
+-- A string, or a string inside an array, is a value that a caller stored: it must
+-- not be read as a redirect or a cluster failure, or a stored value could send the
+-- client to another host.
+local function pipeline_error(result)
+    if type(result) == "table" and result[1] == false
+       and type(result[2]) == "string" then
+        return result[2]
+    end
+end
+
+
 local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
     --construct final result with origin index
     local finalret = {}
@@ -1313,8 +1325,10 @@ local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
         local res = v
         local need_to_fetch_slots = true
         for i = 1, #reqs do
-            --deal with redis cluster ask redirection
-            local ask_host, ask_port = parse_ask_signal(res[i])
+            -- Read a redirect from the error reply only. A value in the reply is
+            -- caller data, not a signal.
+            local reply_err = pipeline_error(res[i])
+            local ask_host, ask_port = parse_ask_signal(reply_err)
             if ask_host ~= nil and ask_port ~= nil then
                 ngx_log(NGX_DEBUG, "handle ask signal for cmd:", reqs[i]["cmd"], " key:", reqs[i]["key"], " target host:", ask_host, " target port:", ask_port)
                 local askres, err = handle_command_with_retry(self, ask_host, ask_port, true, reqs[i]["cmd"], reqs[i]["key"], unpack(reqs[i]["args"]))
@@ -1323,7 +1337,7 @@ local function construct_final_pipeline_resp(self, node_res_map, node_req_map)
                 else
                     finalret[reqs[i].origin_index] = askres
                 end
-            elseif has_moved_signal(res[i]) then
+            elseif has_moved_signal(reply_err) then
                 ngx_log(NGX_DEBUG, "handle moved signal for cmd:", reqs[i]["cmd"], " key:", reqs[i]["key"])
                 if need_to_fetch_slots then
                     -- if there is multiple signal for moved, we just need to fetch slot cache once, and do retry.
@@ -1347,13 +1361,10 @@ end
 
 local function has_cluster_fail_signal_in_pipeline(res)
     for i = 1, #res do
-        if res[i] ~= ngx.null and type(res[i]) == "table" then
-            for j = 1, #res[i] do
-                if type(res[i][j]) == "string" and string_sub(res[i][j], 1, 11) == "CLUSTERDOWN" then
-                    ngx_log(NGX_INFO, res[i][j])
-                    return true
-                end
-            end
+        local reply_err = pipeline_error(res[i])
+        if reply_err and string_sub(reply_err, 1, 11) == "CLUSTERDOWN" then
+            ngx_log(NGX_INFO, reply_err)
+            return true
         end
     end
     return false
@@ -1515,14 +1526,6 @@ local function group_keys_by_slot(keys)
     end
 
     return order, groups
-end
-
-
--- A pipeline result holds { false, err } for a command that Redis rejected.
-local function pipeline_error(result)
-    if type(result) == "table" and result[1] == false then
-        return result[2]
-    end
 end
 
 
