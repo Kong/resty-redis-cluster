@@ -2076,8 +2076,11 @@ setmetatable(_M, {
     __index = function(_, cmd)
         local method =
         function(self, ...)
-            if cmd == "eval" or cmd == "evalsha" then
-                return _do_eval_cmd(self, cmd, ...)
+            -- A command name is matched without regard to case, so EVAL must take
+            -- this path too. _do_eval_cmd and _do_cmd compare the lower case name.
+            local lower = string.lower(cmd)
+            if lower == "eval" or lower == "evalsha" then
+                return _do_eval_cmd(self, lower, ...)
             else
                 return _do_cmd(self, cmd, ...)
             end
