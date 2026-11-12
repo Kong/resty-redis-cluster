@@ -503,9 +503,17 @@ page from Redis can hold more keys than `COUNT` asks for, so one call can return
 `COUNT`. A sparse `MATCH` cannot scan the whole keyspace in one call. Call again until the cursor
 is `"0"`.
 
-The cursor also carries a fingerprint of the master list. When the set of masters changes during
-the iteration, `scan_all` returns an error that starts with `scan cursor is stale` and asks you to
-start again from cursor `0`. A change in the order of the same masters does not affect the cursor.
+The cursor also carries a fingerprint of the master list. When the cached master list changes
+during the iteration, `scan_all` returns an error that starts with `scan cursor is stale` and asks
+you to start again from cursor `0`. A change in the order of the same masters does not affect the
+cursor.
+
+`scan_all` uses the master list from the slot cache. The list changes only when a refresh runs, and
+a refresh happens when another command hits `MOVED` or a connection error, or when you call
+`refresh_slots()` yourself. A scan alone never refreshes it. If the cluster gains a master or
+replaces one, and nothing else refreshes the cache, `scan_all` keeps walking the old list and misses
+the keys on the new master. Call `refresh_slots()` before a full walk when the topology may have
+changed.
 
 `scan_all` reads masters only. It ignores `enable_slave_read`, because a replica can hold keys
 that its master does not have yet and can lag behind. Do not use `scan_all` to count keys for a
