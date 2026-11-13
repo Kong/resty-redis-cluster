@@ -561,6 +561,10 @@ cluster.
 
 #### Unreleased
 
+1. TBD
+
+#### 1.8.0
+
 1. Split `MGET`, `DEL`, `UNLINK`, `EXISTS` and `TOUCH` by slot, and combine the parts. A cross-slot command no longer fails with `CROSSSLOT`. A split `DEL`, `UNLINK` or `TOUCH` is not atomic: an error on one part leaves the other parts applied, and the call does not report how many keys it changed.
 2. A command that cannot be split returns a clear error when its keys are in different slots. This covers `MSET`, `MSETNX`, `SINTER`, `SUNION`, `SDIFF`, `PFCOUNT`, `RENAME`, `RENAMENX` and `SMOVE`. `MSET` is not split, because a split `MSET` is not atomic.
 3. A multi-key command inside a pipeline can use one slot. A command that spans slots returns an error. A `nil` argument, a wrong argument count, or a wrong count for `SMOVE`/`RENAME`/`RENAMENX` also returns an error.
